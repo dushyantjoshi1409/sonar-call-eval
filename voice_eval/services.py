@@ -14,7 +14,7 @@ import wave
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 from pydantic import TypeAdapter, ValidationError
 
@@ -101,6 +101,7 @@ class CreateJobCommand:
     profile_json: str | None = None
     profile_id: str | None = None
     transcript_json: str | None = None
+    transcript_mode: Literal["manual", "provider"] = "manual"
     trusted_reference: str | None = None
     reference_attested: bool = False
     idempotency_key: str | None = None
@@ -219,7 +220,7 @@ class JobService:
                 (
                     f"{media_hash}:{profile_digest}:{transcript_canonical}:"
                     f"{command.trusted_reference or ''}:{command.reference_attested}:"
-                    f"{provider_identity}:{selected_handle or ''}"
+                    f"{provider_identity}:{selected_handle or ''}:{command.transcript_mode}"
                 ).encode()
             ).hexdigest()
             if command.idempotency_key:
@@ -240,7 +241,9 @@ class JobService:
             final_dir.mkdir(mode=0o700)
             final_path = final_dir / f"original{suffix}"
             shutil.move(str(temporary), final_path)
-            status, detail = self._initial_status(bool(segments), selected_config)
+            status, detail = self._initial_status(
+                bool(segments), selected_config, command.transcript_mode
+            )
             values = job_values(
                 job_id=job_id,
                 idempotency_key=command.idempotency_key,
@@ -452,24 +455,30 @@ class JobService:
         return result
 
     def _initial_status(
-        self, has_segments: bool, provider: ProviderConfig | None
+        self,
+        has_segments: bool,
+        provider: ProviderConfig | None,
+        transcript_mode: Literal["manual", "provider"],
     ) -> tuple[str, str]:
         if has_segments:
             return (
                 "review_ready",
                 "Manual transcript imported; review roles and evidence before evaluation",
             )
+        if transcript_mode == "manual":
+            return "needs_transcript", "Import a reviewed transcript to continue"
         if provider is None:
             if self.settings.gemini_api_key and not self.settings.gemini_free_tier_confirmed:
                 return (
                     "needs_configuration",
                     "Confirm Gemini free-tier eligibility or import a reviewed transcript",
                 )
-            return "needs_transcript", "Connect an audio-capable provider or import a transcript"
+            raise InvalidJobInput(
+                "Connect and save an audio-capable provider before using provider transcription"
+            )
         if not provider.supports_transcription:
-            return (
-                "needs_transcript",
-                "Selected provider is chat-only; import a reviewed transcript",
+            raise InvalidJobInput(
+                "The selected provider is chat-only; import a reviewed transcript instead"
             )
         if self.store.pending_count() >= self.settings.max_pending_jobs:
             raise QueueFull("Local processing queue is full; retry later")

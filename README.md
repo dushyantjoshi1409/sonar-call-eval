@@ -43,6 +43,8 @@ Gemini and Groq require an explicit free-tier eligibility attestation. OpenAI an
 
 The `.env` Gemini settings remain as a backward-compatible fallback when no browser session is selected. A selected session never borrows the environment key.
 
+Choose the transcript source explicitly for each upload. `Import reviewed JSON` never queues automatic transcription, even when a provider session exists. `Use connected provider if audio-capable` requires a saved audio-capable session before the upload is accepted; disconnected and chat-only selections are blocked with setup guidance instead of silently creating a manual-transcript job.
+
 Official contracts: [Gemini audio](https://ai.google.dev/gemini-api/docs/audio), [Gemini structured output](https://ai.google.dev/gemini-api/docs/structured-output), [OpenAI file transcription](https://developers.openai.com/api/docs/guides/speech-to-text), [OpenAI structured output](https://developers.openai.com/api/docs/guides/structured-outputs), [Groq OpenAI compatibility](https://console.groq.com/docs/openai), [Groq speech to text](https://console.groq.com/docs/speech-to-text), and [Groq structured output](https://console.groq.com/docs/structured-outputs).
 
 ## Synthetic regression checks

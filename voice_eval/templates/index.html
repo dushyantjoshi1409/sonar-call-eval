@@ -49,7 +49,7 @@
         </select>
       </label>
       <label>Transcript source
-        <select id="transcript-mode">
+        <select id="transcript-mode" name="transcript_mode">
           <option value="manual">Import reviewed JSON</option>
           <option value="provider">Use connected provider if audio-capable</option>
         </select>
@@ -104,6 +104,7 @@
 const presets = {{ presets | tojson }};
 const initialProviderSession = {{ provider_session | tojson }};
 const environmentProvider = {{ environment_provider | tojson }};
+let activeProviderSession = initialProviderSession.connected ? initialProviderSession : environmentProvider;
 const select = document.getElementById('profile-select');
 const editor = document.getElementById('profile-json');
 const transcriptMode = document.getElementById('transcript-mode');
@@ -137,6 +138,7 @@ function setProviderFields() {
 }
 function renderProviderStatus(metadata) {
   const status = document.getElementById('provider-status');
+  activeProviderSession = metadata.connected ? metadata : environmentProvider;
   if (metadata.connected) { status.textContent = `Configured · ${metadata.provider} · ${metadata.judge_model} · not remotely verified`; status.className = 'connection-state connected'; }
   else if (environmentProvider) { status.textContent = `Environment fallback · ${environmentProvider.provider} · configured, not remotely verified`; status.className = 'connection-state connected'; }
   else { status.textContent = 'Not connected · offline checks remain available'; status.className = 'connection-state'; }
@@ -164,7 +166,17 @@ async function submitAndOpen(endpoint, options) {
   window.location.assign(`/jobs/${body.id}`);
 }
 document.getElementById('upload-form').addEventListener('submit', event => {
-  event.preventDefault(); const data = new FormData(event.currentTarget);
+  event.preventDefault();
+  const error = document.getElementById('form-error');
+  if (transcriptMode.value === 'provider' && !activeProviderSession) {
+    error.textContent = 'Connect and save an audio-capable provider above before creating this evaluation.';
+    error.hidden = false; document.querySelector('.provider-card').scrollIntoView({behavior:'smooth'}); document.getElementById('provider-key').focus(); return;
+  }
+  if (transcriptMode.value === 'provider' && !activeProviderSession.supports_transcription) {
+    error.textContent = 'The selected provider is chat-only. Choose Import reviewed JSON or connect an audio-capable provider.';
+    error.hidden = false; transcriptMode.focus(); return;
+  }
+  const data = new FormData(event.currentTarget);
   submitAndOpen('/api/jobs', {method:'POST', body:data, headers:{'Idempotency-Key':crypto.randomUUID()}});
 });
 document.getElementById('demo-button').addEventListener('click', event => {

@@ -18,7 +18,9 @@
 | `GET` | `/api/regression-runs` | List recent synthetic fixed-suite results |
 | `POST` | `/api/regression-runs` | Run the fixed suite with an optional compatible baseline |
 
-`POST /api/jobs` is multipart form data with `audio`, `profile_json`, optional `transcript_json`, optional `trusted_reference`, and `reference_attested`. Supply `Idempotency-Key`; the same key and payload returns the existing job, while changed inputs return HTTP 409. A reference affects WER only when the reviewer attests that it matches the same audio.
+`POST /api/jobs` is multipart form data with `audio`, `profile_json`, `transcript_mode` (`manual` or `provider`), optional `transcript_json`, optional `trusted_reference`, and `reference_attested`. Supply `Idempotency-Key`; the same key and payload returns the existing job, while changed inputs return HTTP 409. A reference affects WER only when the reviewer attests that it matches the same audio.
+
+`manual` is the default for backward compatibility. With no imported segments it creates an honest `needs_transcript` job and does not invoke a connected provider. `provider` requires a currently selected audio-capable provider before media is stored: no session returns HTTP 409 and a chat-only session returns HTTP 422. The mode is part of the idempotency payload identity.
 
 `POST /api/provider-session` accepts `provider`, `api_key`, `judge_model`, optional `transcription_model` and `base_url`, plus `free_tier_attested` and `allow_paid_use`. The response never contains the key or credential handle. The cookie selects one isolated in-memory credential; jobs capture an internal opaque handle so later session changes cannot switch an in-flight job to another key. Clear, expiry, or restart makes future use fail with a reconnect instruction. An already submitted synchronous request may still finish.
 

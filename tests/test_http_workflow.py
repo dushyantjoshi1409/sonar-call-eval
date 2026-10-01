@@ -158,9 +158,7 @@ def test_real_audio_without_transcript_or_key_needs_transcript(
     )
     assert response.status_code == 201
     assert response.json()["status"] == "needs_transcript"
-    assert response.json()["status_detail"] == (
-        "Connect an audio-capable provider or import a transcript"
-    )
+    assert response.json()["status_detail"] == "Import a reviewed transcript to continue"
 
 
 def test_job_page_distinguishes_missing_transcript_from_provider_failure(

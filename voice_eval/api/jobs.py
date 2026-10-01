@@ -1,6 +1,6 @@
 """JSON and media routes for the complete evaluation job lifecycle."""
 
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, File, Form, Header, HTTPException, Request, Response, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
@@ -25,12 +25,16 @@ async def create_job(
     profile_json: Annotated[str | None, Form()] = None,
     profile_id: Annotated[str | None, Form()] = None,
     transcript_json: Annotated[str | None, Form()] = None,
+    transcript_mode: Annotated[Literal["manual", "provider"], Form()] = "manual",
     trusted_reference: Annotated[str | None, Form()] = None,
     reference_attested: Annotated[bool, Form()] = False,
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
 ) -> PublicJob:
     """Create a validated local job or replay an identical idempotent request."""
-    from voice_eval.provider_sessions import SESSION_COOKIE_NAME
+    from voice_eval.provider_sessions import (
+        SESSION_COOKIE_NAME,
+        environment_provider_config,
+    )
 
     cookie_token = request.cookies.get(SESSION_COOKIE_NAME)
     session = runtime.sessions.session_for_cookie(cookie_token)
@@ -39,6 +43,21 @@ async def create_job(
             401,
             "Provider session expired or was cleared; reconnect or clear the stale cookie",
         )
+    selected_provider = session.config if session else environment_provider_config(runtime.settings)
+    if transcript_mode == "provider" and selected_provider is None:
+        raise HTTPException(
+            409,
+            "Connect and save an audio-capable provider before using provider transcription",
+        )
+    if (
+        transcript_mode == "provider"
+        and selected_provider is not None
+        and not selected_provider.supports_transcription
+    ):
+        raise HTTPException(
+            422,
+            "The selected provider is chat-only; import a reviewed transcript instead",
+        )
     result = await jobs.create_job(
         CreateJobCommand(
             audio=audio,
@@ -46,6 +65,7 @@ async def create_job(
             profile_json=profile_json,
             profile_id=profile_id,
             transcript_json=transcript_json,
+            transcript_mode=transcript_mode,
             trusted_reference=trusted_reference,
             reference_attested=reference_attested,
             idempotency_key=idempotency_key,

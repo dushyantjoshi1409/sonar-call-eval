@@ -349,3 +349,100 @@ def test_job_captures_session_handle_and_clear_fails_without_env_fallback(
     evaluated = client.post(f"/api/jobs/{job_id}/evaluate")
     assert evaluated.status_code == 503
     assert "reconnect" in evaluated.json()["detail"].lower()
+
+
+def test_provider_transcript_mode_requires_audio_capable_connection(
+    client: TestClient, wav_bytes: bytes, dental_profile: dict[str, object]
+) -> None:
+    missing = client.post(
+        "/api/jobs",
+        files={"audio": ("appointment.wav", wav_bytes, "audio/wav")},
+        data={
+            "profile_json": json.dumps(dental_profile),
+            "transcript_mode": "provider",
+        },
+    )
+    assert missing.status_code == 409
+    assert "connect" in missing.json()["detail"].lower()
+    assert list(client.app.state.runtime.media_root.rglob("*")) == []
+
+    connected = client.post(
+        "/api/provider-session",
+        json={
+            "provider": "gemini",
+            "api_key": "chat-only-test-key",
+            "judge_model": "gemini-3.5-flash-lite",
+            "transcription_model": None,
+            "free_tier_attested": True,
+        },
+    )
+    assert connected.status_code == 201
+    unsupported = client.post(
+        "/api/jobs",
+        files={"audio": ("appointment.wav", wav_bytes, "audio/wav")},
+        data={
+            "profile_json": json.dumps(dental_profile),
+            "transcript_mode": "provider",
+        },
+    )
+    assert unsupported.status_code == 422
+    assert "chat-only" in unsupported.json()["detail"].lower()
+    assert list(client.app.state.runtime.media_root.rglob("*")) == []
+
+
+def test_provider_transcript_mode_captures_browser_session_without_external_call(
+    client: TestClient, wav_bytes: bytes, dental_profile: dict[str, object]
+) -> None:
+    connected = client.post(
+        "/api/provider-session",
+        json={
+            "provider": "gemini",
+            "api_key": "provider-mode-test-key",
+            "judge_model": "gemini-3.5-flash-lite",
+            "transcription_model": "gemini-3.5-flash-lite",
+            "free_tier_attested": True,
+        },
+    )
+    assert connected.status_code == 201
+
+    created = client.post(
+        "/api/jobs",
+        files={"audio": ("appointment.wav", wav_bytes, "audio/wav")},
+        data={
+            "profile_json": json.dumps(dental_profile),
+            "transcript_mode": "provider",
+        },
+    )
+
+    assert created.status_code == 201
+    assert created.json()["status"] == "queued"
+    internal = client.app.state.runtime.store.get_job(created.json()["id"])
+    assert internal["provider_handle"]
+
+
+def test_manual_mode_without_transcript_never_queues_connected_provider(
+    client: TestClient, wav_bytes: bytes, dental_profile: dict[str, object]
+) -> None:
+    connected = client.post(
+        "/api/provider-session",
+        json={
+            "provider": "gemini",
+            "api_key": "manual-mode-test-key",
+            "judge_model": "gemini-3.5-flash-lite",
+            "transcription_model": "gemini-3.5-flash-lite",
+            "free_tier_attested": True,
+        },
+    )
+    assert connected.status_code == 201
+
+    created = client.post(
+        "/api/jobs",
+        files={"audio": ("appointment.wav", wav_bytes, "audio/wav")},
+        data={
+            "profile_json": json.dumps(dental_profile),
+            "transcript_mode": "manual",
+        },
+    )
+
+    assert created.status_code == 201
+    assert created.json()["status"] == "needs_transcript"
