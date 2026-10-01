@@ -26,10 +26,14 @@ def wav_bytes(tmp_path: Path) -> bytes:
 @pytest.fixture
 def client(tmp_path: Path) -> Iterator[TestClient]:
     settings = Settings(
+        _env_file=None,
         data_dir=tmp_path / "data",
         database_path=tmp_path / "data" / "app.sqlite3",
         ffprobe_path="internal-wave",
         start_worker=False,
+        GEMINI_API_KEY=None,
+        GEMINI_MODEL="gemini-3.5-flash-lite",
+        GEMINI_FREE_TIER_CONFIRMED=False,
         allowed_hosts={"testserver", "localhost", "127.0.0.1"},
     )
     app = create_app(settings)
