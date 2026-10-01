@@ -12,7 +12,7 @@ Run from the repository root:
 .venv/bin/mypy voice_eval
 ```
 
-The suite covers the HTTP upload-review-evaluate-export-delete path, generic/dental/food/custom profiles, missing policy and speaker mapping, exact evidence rejection, prompt-injection shaped input, WER boundaries, provider rate limits and ambiguous timeouts, restart recovery, idempotency conflicts, late-write prevention after deletion, and core media limits.
+The 39-test suite covers the HTTP upload-review-evaluate-export-delete path, generic/dental/food/custom profiles, strict Boolean/grade/numeric output validation, missing policy and speaker mapping, exact evidence rejection, prompt-injection shaped input, WER boundaries, provider rate limits and ambiguous timeouts, restart recovery, idempotency conflicts, deletion rollback, failed-create cleanup, late-write prevention after deletion, and core media limits. A long-call regression verifies that evidence is capped at 20 excerpts while counts still cover all 25 matching turns.
 
 Final exact command results are recorded in the completion report generated for this task. A passing mock/fixture test is not a live Gemini execution.
 
@@ -26,7 +26,13 @@ Without a reviewed transcript or an eligible Gemini key, uploading this real rec
 
 Chrome accepted the supplied MP3 through the actual file input with the dental preset and no transcript. The resulting persisted job displayed `needs_transcript`, the exact missing-key reason, 38.8 seconds, two channels, and no evaluation action. Native playback changed from play to pause and the media request returned HTTP 206.
 
-The separate synthetic demo was visibly marked before and after evaluation. It produced four independent findings, explicit missing-context statements, versioned export/rerun controls, and evidence links that focused the matching turn and sought the player to 3.0 seconds. At 1280px and an emulated 390x844 mobile viewport, document width equalled viewport width and the console had no errors.
+The separate synthetic demo was visibly marked before and after evaluation. It produced four independent findings, strict Yes/No values, proposed grades/classifications, numeric measurements, explicit missing-context statements, versioned export/rerun controls, and evidence links that focused the matching turn and sought the player to 3.0 seconds. Export returned report schema `1.1`, four findings, and `aggregate_score=null`. At 1280px and an emulated 390x844 mobile viewport, document width equalled viewport width and the console had no errors.
+
+## Architecture artifact
+
+`docs/architecture.json` is the authored Archify source and `docs/architecture.html` is the generated standalone viewer. Final showcase validation passed 9/9 with zero composition errors or warnings. Automated browser evidence passed at 1440x900, 1600x1000, 1920x1080, and 2048x1320 with no overflow. Light and dark screenshots were inspected. The final diagram distinguishes background transcription, the human review gate, and the synchronous semantic judge call, while marking Gemini as remote and optional.
+
+The artifact-bound receipts and screenshots are retained only in ignored local validation storage at `.artifacts/architecture-review/`; they are not application assets.
 
 ## Known limits
 

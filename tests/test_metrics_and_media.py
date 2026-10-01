@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+from voice_eval.config import Settings
 from voice_eval.domain import Segment
 from voice_eval.media import MediaError, MediaValidator
 from voice_eval.metrics import character_error_rate, word_error_rate
@@ -53,3 +54,12 @@ def test_segments_reject_non_finite_timestamps() -> None:
         Segment(id="bad", speaker="agent", start=float("nan"), end=1, text="hello")
     with pytest.raises(ValidationError):
         Segment(id="bad", speaker="agent", start=0, end=float("inf"), text="hello")
+
+
+def test_settings_reject_unbounded_or_non_free_configuration(tmp_path: Path) -> None:
+    with pytest.raises(ValidationError, match="cannot be disabled"):
+        Settings(data_dir=tmp_path, free_only=False)
+    with pytest.raises(ValidationError):
+        Settings(data_dir=tmp_path, max_upload_bytes=0)
+    with pytest.raises(ValidationError):
+        Settings(data_dir=tmp_path, port=70_000)

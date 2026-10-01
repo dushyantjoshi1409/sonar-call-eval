@@ -73,7 +73,20 @@
     <article class="finding panel">
       <div class="finding-head"><span class="verdict verdict-{{ finding.verdict | lower }}">{{ finding.verdict | replace('_',' ') }}</span><span class="metric-id">{{ finding.metric_id | replace('_',' ') }}</span></div>
       <h3>{{ finding.rationale }}</h3>
-      {% if finding.value %}<div class="value-row">{% for key,value in finding.value.items() %}<span><small>{{ key | replace('_',' ') }}</small><b>{{ value if value is not none else 'unknown' }}</b></span>{% endfor %}</div>{% endif %}
+      <div class="typed-results">
+        <div class="typed-result">
+          <small>Boolean · {{ finding.boolean_result.name | replace('_',' ') if finding.boolean_result else 'legacy unavailable' }}</small>
+          <strong>{% if finding.boolean_result and finding.boolean_result.value is not none %}{{ 'Yes' if finding.boolean_result.value else 'No' }}{% else %}Unknown{% endif %}</strong>
+          {% if finding.boolean_result %}<span>Pass when {{ 'Yes' if finding.boolean_result.pass_when else 'No' }} · {{ finding.boolean_result.measurement_kind | replace('_',' ') }}</span>{% endif %}
+        </div>
+        <div class="typed-result">
+          <small>Grade · proposed 0-2</small>
+          <strong>{% if finding.grade_result and finding.grade_result.value is not none %}{{ finding.grade_result.value }} · {{ finding.grade_result.classification | replace('_',' ') }}{% else %}Unknown{% endif %}</strong>
+          {% if finding.grade_result %}<span>{{ finding.grade_result.measurement_kind | replace('_',' ') }} · uncalibrated default</span>{% endif %}
+        </div>
+      </div>
+      {% if finding.measurements %}<div class="value-row numeric-results">{% for measurement in finding.measurements %}<span><small>{{ measurement.name | replace('_',' ') }}</small><b>{{ measurement.value }} {{ measurement.unit }}</b></span>{% endfor %}</div>{% endif %}
+      {% if job.report.schema_version == '1.0' and finding.value %}<div class="value-row"><span><small>Legacy value</small><b>{{ finding.value }}</b></span></div>{% endif %}
       <div class="evidence-list">{% for evidence in finding.evidence %}<button type="button" class="evidence-link" data-segment="{{ evidence.segment_id }}"><span>{{ evidence.segment_id }}</span> “{{ evidence.quote }}”</button>{% endfor %}</div>
     </article>
   {% endfor %}

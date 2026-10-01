@@ -1,3 +1,5 @@
+"""Bounded local audio signature, metadata, and full-decode validation."""
+
 from __future__ import annotations
 
 import json
@@ -9,10 +11,14 @@ from pydantic import BaseModel
 
 
 class MediaError(ValueError):
+    """Uploaded media failed a safe validation boundary."""
+
     pass
 
 
 class MediaMetadata(BaseModel):
+    """Validated metadata used by transcript timing and browser playback."""
+
     duration_seconds: float
     channels: int
     sample_rate: int
@@ -22,6 +28,8 @@ class MediaMetadata(BaseModel):
 
 
 class MediaValidator:
+    """Validate local WAV, MP3, or M4A bytes using bounded subprocess calls."""
+
     def __init__(
         self,
         ffprobe_path: str = "ffprobe",
@@ -35,6 +43,7 @@ class MediaValidator:
         self.max_duration_seconds = max_duration_seconds
 
     def validate(self, path: Path, original_name: str) -> MediaMetadata:
+        """Return metadata or raise ``MediaError`` without invoking a shell."""
         size = path.stat().st_size
         if size == 0 or size > self.max_bytes:
             raise MediaError(f"audio size must be between 1 byte and {self.max_bytes} bytes")

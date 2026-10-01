@@ -1,21 +1,96 @@
+"""Validated domain contracts for profiles, transcripts, evidence, and reports."""
+
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictBool,
+    StrictFloat,
+    StrictInt,
+    field_validator,
+    model_validator,
+)
 
 MetricId = Literal["semantic_uptake", "unnecessary_repetition", "scenario_flow", "response_length"]
+MeasurementKind = Literal["deterministic", "schema_judge", "synthetic_fixture"]
+MAX_FINDING_EVIDENCE = 20
 
 
 class Verdict(StrEnum):
+    """Evidence status, kept separate from any typed evaluation value."""
+
     PASS = "PASS"
     FAIL = "FAIL"
     NOT_APPLICABLE = "NOT_APPLICABLE"
     UNKNOWN = "UNKNOWN"
 
 
+class GradeClass(StrEnum):
+    """Proposed uncalibrated three-level quality classification."""
+
+    NEEDS_IMPROVEMENT = "NEEDS_IMPROVEMENT"
+    PARTIAL = "PARTIAL"
+    MEETS_EXPECTATIONS = "MEETS_EXPECTATIONS"
+
+
+class BooleanResult(BaseModel):
+    """Explicit nullable Yes/No output with declared pass polarity."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(pattern=r"^[a-z][a-z0-9_]{1,63}$")
+    value: StrictBool | None
+    pass_when: StrictBool
+    measurement_kind: MeasurementKind
+
+
+class GradeResult(BaseModel):
+    """Nullable proposed 0-2 grade and its fixed classification label.
+
+    The source photographs name grading/classification but provide no scale. This
+    default is deliberately uncalibrated and independent of aggregate scoring.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    scale: Literal["proposed-quality-v1"] = "proposed-quality-v1"
+    value: Annotated[StrictInt, Field(ge=0, le=2)] | None = None
+    classification: GradeClass | None = None
+    measurement_kind: MeasurementKind
+
+    @model_validator(mode="after")
+    def validate_classification(self) -> GradeResult:
+        expected = {
+            0: GradeClass.NEEDS_IMPROVEMENT,
+            1: GradeClass.PARTIAL,
+            2: GradeClass.MEETS_EXPECTATIONS,
+        }
+        if (self.value is None) != (self.classification is None):
+            raise ValueError("grade value and classification must both be null or present")
+        if self.value is not None and self.classification != expected[self.value]:
+            raise ValueError("grade classification does not match the proposed 0-2 scale")
+        return self
+
+
+class NumericMeasurement(BaseModel):
+    """A named numeric observation with units and provenance."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(pattern=r"^[a-z][a-z0-9_]{1,79}$")
+    value: StrictInt | Annotated[StrictFloat, Field(allow_inf_nan=False)]
+    unit: Literal["count", "words", "seconds"]
+    measurement_kind: MeasurementKind
+
+
 class ScenarioProfile(BaseModel):
+    """Versioned scenario instructions snapshotted for each evaluation run."""
+
     model_config = ConfigDict(extra="forbid")
 
     schema_version: Literal["1.0"] = "1.0"
@@ -36,10 +111,14 @@ class ScenarioProfile(BaseModel):
 
 
 class ProfileSnapshot(ScenarioProfile):
+    """Immutable profile contents and canonical hash used for one run."""
+
     hash: str = Field(pattern=r"^[a-f0-9]{64}$")
 
 
 class Segment(BaseModel):
+    """One speaker-labelled transcript span with explicit timing precision."""
+
     model_config = ConfigDict(extra="forbid")
 
     id: str = Field(min_length=1, max_length=80)
@@ -59,6 +138,8 @@ class Segment(BaseModel):
 
 
 class Evidence(BaseModel):
+    """Exact quote offsets into one stored transcript segment."""
+
     model_config = ConfigDict(extra="forbid")
 
     segment_id: str
@@ -74,22 +155,49 @@ class Evidence(BaseModel):
 
 
 class Finding(BaseModel):
+    """One independent verdict with typed values and source evidence."""
+
     model_config = ConfigDict(extra="forbid")
 
     metric_id: MetricId
     verdict: Verdict
     rationale: str = Field(min_length=1, max_length=2_000)
-    evidence: list[Evidence] = Field(default_factory=list, max_length=20)
+    evidence: list[Evidence] = Field(default_factory=list, max_length=MAX_FINDING_EVIDENCE)
+    boolean_result: BooleanResult | None = None
+    grade_result: GradeResult | None = None
+    measurements: list[NumericMeasurement] = Field(default_factory=list, max_length=20)
+    candidate_verdict: Verdict | None = None
+    # Retained only so stored schema 1.0 reports remain readable.
     value: dict[str, float | int | str | bool | None] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def determinate_findings_require_evidence(self) -> Finding:
         if self.verdict in {Verdict.PASS, Verdict.FAIL} and not self.evidence:
             raise ValueError("PASS and FAIL findings require source evidence")
+        if self.verdict in {Verdict.UNKNOWN, Verdict.NOT_APPLICABLE}:
+            if self.boolean_result is not None and self.boolean_result.value is not None:
+                raise ValueError("Boolean value must be null for UNKNOWN or NOT_APPLICABLE")
+            if self.grade_result is not None and self.grade_result.value is not None:
+                raise ValueError("Grade value must be null for UNKNOWN or NOT_APPLICABLE")
+        if self.boolean_result is not None and self.boolean_result.value is not None:
+            expected = (
+                Verdict.PASS
+                if self.boolean_result.value == self.boolean_result.pass_when
+                else Verdict.FAIL
+            )
+            if self.verdict != expected:
+                raise ValueError("Boolean polarity contradicts the finding verdict")
+        if self.grade_result is not None and self.grade_result.value is not None:
+            if self.verdict == Verdict.PASS and self.grade_result.value != 2:
+                raise ValueError("PASS requires a Meets Expectations grade")
+            if self.verdict == Verdict.FAIL and self.grade_result.value == 2:
+                raise ValueError("FAIL cannot carry a Meets Expectations grade")
         return self
 
 
 class Coverage(BaseModel):
+    """Observed evaluation coverage, not a quality score."""
+
     transcript_segments: int
     timed_segments: int
     mapped_speakers: bool
@@ -99,6 +207,8 @@ class Coverage(BaseModel):
 
 
 class WordErrorRate(BaseModel):
+    """WER operation result with edit counts and denominator."""
+
     value: float
     substitutions: int
     deletions: int
@@ -108,6 +218,8 @@ class WordErrorRate(BaseModel):
 
 
 class CharacterErrorRate(BaseModel):
+    """CER operation result over normalized Unicode code points."""
+
     value: float
     substitutions: int
     deletions: int
@@ -117,9 +229,11 @@ class CharacterErrorRate(BaseModel):
 
 
 class EvaluationReport(BaseModel):
+    """Versioned report containing independent findings and explicit unknowns."""
+
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal["1.0"] = "1.0"
+    schema_version: Literal["1.0", "1.1"] = "1.1"
     run_version: int = Field(ge=1)
     evaluator: str
     profile_snapshot: ProfileSnapshot
@@ -134,6 +248,8 @@ class EvaluationReport(BaseModel):
 
 
 class TranscriptionResult(BaseModel):
+    """Untrusted provider transcript requiring speaker and timing review."""
+
     model_config = ConfigDict(extra="forbid")
 
     segments: list[Segment] = Field(min_length=1, max_length=1_000)
@@ -143,6 +259,8 @@ class TranscriptionResult(BaseModel):
 
 
 class JudgeResult(BaseModel):
+    """Schema-constrained provider output for the three semantic metrics."""
+
     model_config = ConfigDict(extra="forbid")
 
     findings: list[Finding] = Field(min_length=3, max_length=3)
@@ -153,4 +271,28 @@ class JudgeResult(BaseModel):
         actual = {finding.metric_id for finding in self.findings}
         if actual != expected:
             raise ValueError("judge must return each semantic metric exactly once")
+        for finding in self.findings:
+            if finding.boolean_result is None or finding.grade_result is None:
+                raise ValueError("judge findings require Boolean and grade result objects")
+            if finding.verdict in {Verdict.PASS, Verdict.FAIL} and (
+                finding.boolean_result.value is None or finding.grade_result.value is None
+            ):
+                raise ValueError("determinate judge findings require Boolean and grade values")
+            if finding.boolean_result.measurement_kind != "schema_judge":
+                raise ValueError("judge Boolean values require schema_judge provenance")
+            if finding.grade_result.measurement_kind != "schema_judge":
+                raise ValueError("judge grades require schema_judge provenance")
+        expected_boolean = {
+            "semantic_uptake": ("meaning_respected", True),
+            "unnecessary_repetition": ("unnecessary_repetition", False),
+            "scenario_flow": ("flow_followed", True),
+        }
+        for finding in self.findings:
+            assert finding.boolean_result is not None
+            name, pass_when = expected_boolean[finding.metric_id]
+            if (
+                finding.boolean_result.name != name
+                or finding.boolean_result.pass_when is not pass_when
+            ):
+                raise ValueError("judge Boolean name or polarity does not match the metric")
         return self

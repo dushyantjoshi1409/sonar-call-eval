@@ -44,5 +44,5 @@ packages = ["voice_eval"]
 [tool.setuptools.package-data]
 voice_eval = ["templates/*.html", "static/*"]
 
-[tool.setuptools]
-packages = ["voice_eval"]
+[tool.setuptools.packages.find]
+include = ["voice_eval*"]

@@ -1,3 +1,5 @@
+"""Trusted-reference WER and CER operations with declared normalization."""
+
 from __future__ import annotations
 
 import unicodedata
@@ -8,6 +10,7 @@ from voice_eval.domain import CharacterErrorRate, WordErrorRate
 
 
 def normalize_string(text: str) -> str:
+    """Apply Unicode NFC, lowercase, punctuation removal, and whitespace collapse."""
     normalized = unicodedata.normalize("NFC", text).lower()
     cleaned = "".join(
         character
@@ -21,10 +24,12 @@ def normalize_string(text: str) -> str:
 
 
 def normalize_text(text: str) -> list[str]:
+    """Return normalized whitespace-delimited units used as the WER denominator."""
     return normalize_string(text).split()
 
 
 def word_error_rate(reference: str | None, hypothesis: str | None) -> WordErrorRate | None:
+    """Calculate WER counts, returning ``None`` without a non-empty reference."""
     if reference is None or hypothesis is None:
         return None
     expected = normalize_text(reference)
@@ -44,6 +49,7 @@ def word_error_rate(reference: str | None, hypothesis: str | None) -> WordErrorR
 def character_error_rate(
     reference: str | None, hypothesis: str | None
 ) -> CharacterErrorRate | None:
+    """Calculate Unicode code-point CER, or ``None`` without a usable reference."""
     if reference is None or hypothesis is None:
         return None
     expected = list(normalize_string(reference))

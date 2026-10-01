@@ -34,4 +34,36 @@ Unknown keys are rejected. The exact canonical profile is hashed with SHA-256 an
 
 ## Finding contract
 
-Every finding has one of `PASS`, `FAIL`, `NOT_APPLICABLE`, or `UNKNOWN`, plus a rationale, typed values, and zero or more evidence objects. Evidence contains `segment_id`, an exact `quote`, and `[start_char, end_char)` offsets. The report is rejected if the quote does not exactly resolve in the stored transcript. Findings remain separate and `aggregate_score` is always null.
+Every schema `1.1` finding has one of `PASS`, `FAIL`, `NOT_APPLICABLE`, or `UNKNOWN`, plus a rationale, explicit typed outputs, and zero or more evidence objects. Evidence contains `segment_id`, an exact `quote`, and `[start_char, end_char)` offsets. The report is rejected if the quote does not exactly resolve in the stored transcript. Findings remain separate and `aggregate_score` is always null.
+
+```json
+{
+  "metric_id": "unnecessary_repetition",
+  "verdict": "FAIL",
+  "rationale": "An identical agent turn appears more than once.",
+  "evidence": [
+    {"segment_id": "agent-2", "quote": "Could you confirm that?", "start_char": 0, "end_char": 23}
+  ],
+  "boolean_result": {
+    "name": "unnecessary_repetition",
+    "value": true,
+    "pass_when": false,
+    "measurement_kind": "schema_judge"
+  },
+  "grade_result": {
+    "scale": "proposed-quality-v1",
+    "value": 0,
+    "classification": "NEEDS_IMPROVEMENT",
+    "measurement_kind": "schema_judge"
+  },
+  "measurements": [
+    {"name": "exact_repeated_turns", "value": 3, "unit": "count", "measurement_kind": "deterministic"}
+  ],
+  "candidate_verdict": null,
+  "value": {}
+}
+```
+
+Boolean values are strict JSON booleans, not `0`, `1`, or strings. Null means unknown, while `false` remains an observed No. Grade values are strict integers on the proposed 0-2 quality scale: 0 `NEEDS_IMPROVEMENT`, 1 `PARTIAL`, and 2 `MEETS_EXPECTATIONS`. Numeric measurements must be finite and carry a unit plus provenance. UNKNOWN and NOT_APPLICABLE force Boolean and grade values to null.
+
+`evidence` is capped at 20 exact excerpts per finding. When more turns match, the rationale identifies the list as a sample and full counts remain in `measurements`; source transcript segments are not discarded. Stored schema `1.0` reports remain readable through the legacy `value` field, while new runs write schema `1.1`.

@@ -1,7 +1,10 @@
+"""Durable single-worker transcription queue and recovery behavior."""
+
 from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from contextlib import suppress
 from pathlib import Path
 from typing import Any
@@ -11,14 +14,23 @@ from voice_eval.evaluation import validate_transcript_segments
 from voice_eval.providers import GeminiAdapter, ProviderError
 from voice_eval.store import Store
 
+logger = logging.getLogger(__name__)
+
 
 class Worker:
+    """Persisted single-consumer queue for optional Gemini transcription.
+
+    The outer loop catches unexpected exceptions so one job cannot terminate the
+    process worker, logs the traceback, and exposes only an exception type to users.
+    """
+
     def __init__(self, store: Store, settings: Settings) -> None:
         self.store = store
         self.settings = settings
         self._stopping = asyncio.Event()
 
     async def run(self) -> None:
+        """Recover interrupted work, sweep retention, and process queued jobs."""
         self.store.recover_interrupted()
         self.store.sweep_expired(self.settings.retention_hours)
         while not self._stopping.is_set():
@@ -30,6 +42,7 @@ class Worker:
             try:
                 await asyncio.to_thread(self._transcribe, job)
             except Exception as error:
+                logger.exception("Unexpected worker failure for job %s", job["id"])
                 with suppress(PermissionError):
                     self.store.update(
                         str(job["id"]),
@@ -38,6 +51,7 @@ class Worker:
                     )
 
     def stop(self) -> None:
+        """Request cooperative shutdown after any active provider call returns."""
         self._stopping.set()
 
     def _transcribe(self, job: dict[str, Any]) -> None:
@@ -48,11 +62,13 @@ class Worker:
                 status_detail="Gemini free-tier configuration is incomplete",
             )
             return
-        adapter = GeminiAdapter(self.settings.gemini_api_key, self.settings.gemini_model)
         suffix = Path(str(job["media_path"])).suffix.lower()
         mime = {".wav": "audio/wav", ".mp3": "audio/mpeg", ".m4a": "audio/mp4"}[suffix]
         try:
-            result = adapter.transcribe(Path(str(job["media_path"])), mime)
+            with GeminiAdapter(
+                self.settings.gemini_api_key, self.settings.gemini_model
+            ) as adapter:
+                result = adapter.transcribe(Path(str(job["media_path"])), mime)
             duration = float(job["media"]["duration_seconds"])
             try:
                 validate_transcript_segments(result.segments, duration)

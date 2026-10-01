@@ -1,3 +1,5 @@
+"""Built-in scenario profiles and canonical snapshot hashing."""
+
 from __future__ import annotations
 
 import hashlib
@@ -45,6 +47,7 @@ _PRESETS: dict[str, dict[str, Any]] = {
 
 
 def get_preset(profile_id: str) -> ScenarioProfile:
+    """Return a validated preset or raise ``ValueError`` for an unknown ID."""
     try:
         return ScenarioProfile.model_validate(_PRESETS[profile_id])
     except KeyError as error:
@@ -52,13 +55,16 @@ def get_preset(profile_id: str) -> ScenarioProfile:
 
 
 def list_presets() -> list[ScenarioProfile]:
+    """Return fresh validated models for every built-in profile."""
     return [ScenarioProfile.model_validate(item) for item in _PRESETS.values()]
 
 
 def validate_profile(data: dict[str, Any]) -> ScenarioProfile:
+    """Validate untrusted custom profile data against the versioned schema."""
     return ScenarioProfile.model_validate(data)
 
 
 def profile_hash(profile: ScenarioProfile) -> str:
+    """Hash a canonical JSON profile snapshot for immutable run attribution."""
     payload = json.dumps(profile.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(payload.encode()).hexdigest()

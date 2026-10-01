@@ -1,3 +1,5 @@
+"""SQLite persistence for jobs, transcript revisions, runs, and queue state."""
+
 from __future__ import annotations
 
 import json
@@ -7,12 +9,22 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+_UPDATABLE_JOB_COLUMNS = {
+    "provider_handle",
+    "provider_model",
+    "report_json",
+    "status",
+    "status_detail",
+}
+
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
 
 
 class Store:
+    """Short-lived SQLite connections with transactional versioned writes."""
+
     def __init__(self, database_path: Path) -> None:
         self.database_path = database_path
         database_path.parent.mkdir(parents=True, exist_ok=True)
@@ -82,6 +94,7 @@ class Store:
                 )
 
     def create_job(self, values: dict[str, Any]) -> dict[str, Any]:
+        """Insert an internally assembled job and its initial transcript revision."""
         columns = ", ".join(values)
         placeholders = ", ".join("?" for _ in values)
         with self._connect() as connection:
@@ -97,6 +110,7 @@ class Store:
         return self.get_job(str(values["id"]), include_deleted=True)
 
     def find_by_idempotency_key(self, key: str) -> dict[str, Any] | None:
+        """Find a job including deleted records for idempotency conflict handling."""
         with self._connect() as connection:
             row = connection.execute(
                 "SELECT * FROM jobs WHERE idempotency_key = ?", (key,)
@@ -104,6 +118,7 @@ class Store:
         return self._decode(row) if row else None
 
     def get_job(self, job_id: str, *, include_deleted: bool = False) -> dict[str, Any]:
+        """Return a decoded job, raising ``KeyError`` or ``PermissionError``."""
         with self._connect() as connection:
             row = connection.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
         if row is None:
@@ -114,6 +129,10 @@ class Store:
         return job
 
     def update(self, job_id: str, **values: Any) -> dict[str, Any]:
+        """Update an active job or raise ``PermissionError`` after deletion."""
+        unexpected = values.keys() - _UPDATABLE_JOB_COLUMNS
+        if not values or unexpected:
+            raise ValueError(f"unsupported job update columns: {sorted(unexpected)}")
         values["updated_at"] = _now()
         assignments = ", ".join(f"{key} = ?" for key in values)
         with self._connect() as connection:
@@ -126,6 +145,7 @@ class Store:
         return self.get_job(job_id)
 
     def save_transcript(self, job_id: str, transcript_json: str) -> dict[str, Any]:
+        """Atomically update the current transcript and append its revision."""
         job = self.get_job(job_id)
         revision = int(job["transcript_revision"]) + 1
         now = _now()
@@ -153,6 +173,7 @@ class Store:
         return self.get_job(job_id)
 
     def save_report(self, job_id: str, report_json: str, version: int) -> dict[str, Any]:
+        """Atomically complete a job and append an immutable report version."""
         now = _now()
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
@@ -176,6 +197,7 @@ class Store:
         return self.get_job(job_id)
 
     def get_history(self, job_id: str) -> dict[str, list[dict[str, Any]]]:
+        """Return decoded transcript and report history for export."""
         self.get_job(job_id)
         with self._connect() as connection:
             transcript_rows = connection.execute(
@@ -208,6 +230,7 @@ class Store:
         }
 
     def pending_count(self) -> int:
+        """Count active queued or transcribing jobs for bounded admission."""
         with self._connect() as connection:
             row = connection.execute(
                 "SELECT COUNT(*) AS count FROM jobs WHERE status IN ('queued', 'transcribing') "
@@ -216,6 +239,7 @@ class Store:
         return int(row["count"])
 
     def claim_next(self) -> dict[str, Any] | None:
+        """Atomically claim the oldest queued job for the single worker."""
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
@@ -234,6 +258,7 @@ class Store:
         return self.get_job(str(row["id"]))
 
     def recover_interrupted(self) -> int:
+        """Fail ambiguous in-flight submissions instead of resubmitting them."""
         with self._connect() as connection:
             cursor = connection.execute(
                 "UPDATE jobs SET status = 'failed', status_detail = ?, updated_at = ? "
@@ -247,10 +272,20 @@ class Store:
             return cursor.rowcount
 
     def delete_job(self, job_id: str) -> dict[str, Any]:
-        job = self.get_job(job_id)
+        """Delete database content and media while holding an immediate transaction.
+
+        A media unlink failure rolls back the database mutation, leaving the job
+        retryable and preventing a false deleted state with retained recording bytes.
+        """
         deleted_at = _now()
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+            if row is None:
+                raise KeyError(job_id)
+            job = self._decode(row)
+            if job["deleted_at"]:
+                raise PermissionError(job_id)
             cursor = connection.execute(
                 "UPDATE jobs SET status = 'deleted', status_detail = ?, deleted_at = ?, "
                 "updated_at = ?, transcript_json = NULL, trusted_reference_text = NULL, "
@@ -262,13 +297,14 @@ class Store:
                 raise PermissionError(job_id)
             connection.execute("DELETE FROM runs WHERE job_id = ?", (job_id,))
             connection.execute("DELETE FROM transcript_revisions WHERE job_id = ?", (job_id,))
-        media_path = Path(str(job["media_path"]))
-        media_path.unlink(missing_ok=True)
-        with suppress(OSError):
-            media_path.parent.rmdir()
+            media_path = Path(str(job["media_path"]))
+            media_path.unlink(missing_ok=True)
+            with suppress(OSError):
+                media_path.parent.rmdir()
         return {"id": job_id, "status": "deleted", "deleted_at": deleted_at}
 
     def sweep_expired(self, retention_hours: int) -> int:
+        """Delete active jobs older than the configured retention window."""
         cutoff = (datetime.now(UTC) - timedelta(hours=retention_hours)).isoformat()
         with self._connect() as connection:
             rows = connection.execute(
@@ -309,6 +345,7 @@ def job_values(
     reference_attested: bool = False,
     fixture: bool = False,
 ) -> dict[str, Any]:
+    """Assemble the internal database record for a newly validated job."""
     now = _now()
     return {
         "id": job_id,

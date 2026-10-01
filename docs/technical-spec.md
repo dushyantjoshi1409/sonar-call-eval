@@ -22,6 +22,8 @@ Browser -> FastAPI -> SQLite job/store + private local files -> durable worker -
 | Evaluation module | `evaluate(snapshot) -> report`; deterministic counts and WER alignment, optional narrow Gemini semantic prompts, schema/evidence validation, and no tool access. |
 | Review/export | Evidence, mapping corrections, trusted-reference attestation, findings, missing-input badges and JSON download; suggestions do not change the live agent |
 
+The FastAPI composition root in `voice_eval/app.py` only owns lifespan, middleware, exception-handler installation, static files, and router registration. `voice_eval/api/` owns thin HTTP adapters and response schemas; `voice_eval/services.py` owns use-case coordination; `voice_eval/domain.py` owns strict Pydantic contracts; provider, media, persistence, metrics, evaluation, and worker modules remain independent infrastructure/domain seams. Application filesystem and database initialization occur in lifespan rather than at import time.
+
 Use a Gemini `generateContent` request with response JSON schema, followed by independent Pydantic and source-evidence validation. The free-only configuration allowlists reviewed model IDs and requires the operator to confirm the project tier; application flags cannot override account billing. Pin resolved dependencies in `requirements.lock`. Python 3.12 is the supported baseline.
 
 The adapter seams have real variation: provider-backed and fixture-backed execution. Avoid a generic orchestration framework or a provider marketplace. FFmpeg is a process dependency because safe metadata/decode checks and channel preservation are concrete requirements. JiWER supplies audited edit alignment rather than ad hoc string scoring. Pytest and Ruff are proposed test/lint tools; choose one Python type checker in the build.
@@ -87,16 +89,20 @@ Errors use FastAPI's typed HTTP status plus a safe `detail` string; credentials 
 
 Segments are objects `{id,speaker,start,end,text,precision}`. `speaker` is agent/customer/other/unknown; time fields are finite seconds and may be null only together; precision is manual/model_estimated/chunk/unknown. Source text is stored unchanged. Arbitrary framework logs must be converted explicitly rather than silently treated as a trusted transcript.
 
-The report contract is:
+The report schema `1.1` contract is:
 
 - `schema_version`, `run_version`, evaluator identifier, profile snapshot/hash, and transcript revision.
-- Four independent findings with `metric_id`, fixed verdict enum, concise rationale, typed value map, and exact source evidence.
+- Four independent findings with `metric_id`, fixed verdict enum, concise rationale, strict `boolean_result`, proposed `grade_result`, numeric `measurements`, and exact source evidence.
 - Evidence objects contain `segment_id`, quote, and half-open character offsets. The server verifies every quote against stored source text; timestamps come from the referenced stored segment in the UI.
 - Coverage records transcript/timing/role/policy/reference/trace availability.
 - Trusted-reference WER/CER contain observed value, substitution/deletion/insertion counts, denominator, and normalization version. Missing or unattested reference leaves them null and adds an explicit unknown.
 - `unknowns`, persistent fixture flag, and `aggregate_score=null`.
 
-UNKNOWN carries `reason_code=INSUFFICIENT_EVIDENCE` or a narrower reason such as MISSING_REFERENCE/ROLE_UNCONFIRMED. UNKNOWN and NOT_APPLICABLE require null value; PASS/FAIL require typed value and admissible evidence. Numeric measurements can be recorded without an acceptance threshold using UNKNOWN + reason `THRESHOLD_NOT_DEFINED`, with the raw measurement in a separate `observed_value` field. The UI displays the number without inventing success. JSON booleans and numeric zero must never share a falsy default.
+Boolean outputs declare `pass_when`, so a false observation can be the passing result for undesirable properties such as repetition. Grade values are nullable strict integers on `proposed-quality-v1`: 0 needs improvement, 1 partial, and 2 meets expectations. Measurements are finite strict numbers with units and provenance. UNKNOWN and NOT_APPLICABLE force Boolean and grade values to null. Semantic candidate verdicts produced without a configured judge remain separate from public UNKNOWN verdicts.
+
+Each finding carries at most 20 evidence excerpts. Evaluators sample evidence deterministically when more spans match but calculate count and maximum measurements over every eligible source turn. This bounds reports without truncating transcripts or understating observations. Schema `1.0` reports remain readable through the legacy `value` object; every new report uses `1.1`.
+
+UNKNOWN and NOT_APPLICABLE require null Boolean and grade values. PASS/FAIL require admissible evidence and consistent Boolean polarity. Numeric measurements can be recorded without an acceptance threshold while the semantic verdict remains UNKNOWN. The UI displays numbers without inventing success. JSON booleans and numeric zero never share a falsy default.
 
 ## Security, retention and provenance
 

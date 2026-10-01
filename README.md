@@ -8,6 +8,7 @@ A local FastAPI application for uploading a recorded call, reviewing its transcr
 - SQLite-backed job state, restart recovery, idempotency conflicts, immutable run versions, retention, and local deletion
 - Reviewed manual transcript import, role correction, native audio playback, and evidence seeking
 - Separate PASS, FAIL, NOT_APPLICABLE, and UNKNOWN findings for semantic uptake, repetition, scenario flow, and response length
+- Explicit nullable Yes/No values, proposed 0-2 quality grades/classifications, and finite numeric measurements with provenance
 - Exact source segment and quote-offset validation, explicit coverage and unknowns, and no aggregate score
 - Synthetic demo that is visibly labelled and never substitutes for uploaded audio
 - Optional Gemini audio transcription and schema-constrained judging, restricted to reviewed free-tier model IDs
@@ -67,7 +68,7 @@ Model timestamps and speaker boundaries are always stored as `model_estimated` a
 .venv/bin/mypy voice_eval
 ```
 
-See [requirements](docs/requirements.md), [technical specification](docs/technical-spec.md), [rubric](docs/eval-rubric.md), [API and profile examples](docs/api-and-profiles.md), and [validation evidence](docs/validation.md).
+See the interactive [architecture diagram](docs/architecture.html) and its [source specification](docs/architecture.json), plus [requirements](docs/requirements.md), [technical specification](docs/technical-spec.md), [rubric](docs/eval-rubric.md), [API and profile examples](docs/api-and-profiles.md), and [validation evidence](docs/validation.md).
 
 ## Privacy and limits
 

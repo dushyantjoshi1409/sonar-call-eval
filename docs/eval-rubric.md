@@ -19,13 +19,27 @@ A recording-derived statement, trusted-reference comparison, judge inference and
 
 For a call-level check: FAIL if any eligible turn has an evidenced violation; otherwise UNKNOWN if any necessary eligible turn is unresolved; otherwise PASS if at least one eligible instance was assessed; otherwise NOT_APPLICABLE. Report coverage counts so unreviewed spans remain visible. Technical stage failure is a job error, not a call-quality finding.
 
+## Implemented typed output contract
+
+Report schema `1.1` keeps the four verdicts independent from three explicit output families requested in P2:
+
+| Family | Fields | Rules |
+|---|---|---|
+| Boolean Yes/No | `boolean_result.name`, `value`, `pass_when`, `measurement_kind` | Strict JSON boolean or null. `false` is not missing. Polarity is declared because `unnecessary_repetition=false` and `excessive_length=false` are desirable. |
+| Grading and classification | `grade_result.scale`, `value`, `classification`, `measurement_kind` | Proposed, uncalibrated quality scale: 0 `NEEDS_IMPROVEMENT`, 1 `PARTIAL`, 2 `MEETS_EXPECTATIONS`. UNKNOWN and NOT_APPLICABLE require null value and classification. |
+| Numbers and operations | `measurements[]`, plus report-level `wer` and `cer` | Strict finite numbers with names, units, provenance, operation counts, and denominators where applicable. A number does not create a semantic verdict by itself. |
+
+The fixed grade scale is a quality grade, not a severity score and not an aggregate. PASS with a grade requires 2; FAIL cannot carry 2. Credential-free evaluation of real calls leaves C1-C3 Boolean and grade values null while retaining separately labelled deterministic candidate signals. Synthetic fixtures may have determinate grades because their expected behavior is authored. C4 always reports deterministic counts and a Boolean threshold flag; real-call semantic grade remains null.
+
+Each finding stores at most 20 exact evidence excerpts. When more turns match, the evidence list is an explicitly labelled sample while numeric measurements cover all eligible turns. The transcript itself is never truncated.
+
 ## C1: listening / semantic uptake
 
 **Question:** Did the agent's observable reply respect the caller's meaning, entities, negation and corrections? This is a proxy for listening, not proof of an internal ASR cause.
 
 - Boolean `meaning_respected`: true only where agent uptake preserves relevant facts or appropriately clarifies ambiguity; false on a material contradiction. Ordinary short acknowledgement without evidence of uptake may be UNKNOWN.
 - Numeric `entity_error_count` and `negation_error_count`: count adjudicated mismatches with linked caller/reply spans, never inferred from WER alone. Zero is meaningful only over reviewed eligible spans.
-- Optional proposed ordinal severity: 0 no observed mismatch, 1 minor recoverable misunderstanding, 2 material delivery/complaint/quantity/negation error. It supplements the boolean, not an aggregate quality score.
+- Proposed quality grade: 0 needs improvement, 1 partial, 2 meets expectations. Raw mismatch counts remain separate numeric measurements.
 
 Example (authored, not a measured call): caller at 12-15s says “Khana garam nahi tha”; agent at 16-19s says “Achha, khana garam tha.” C1 FAIL with a negation error. If caller audio is unintelligible and only an uncertain ASR text suggests “nahi”, C1 UNKNOWN until audio review. If the agent asks “Aap keh rahe hain khana thanda tha?”, then accepts correction, grade the verified clarification behavior and record any preceding mismatch separately.
 
@@ -37,7 +51,7 @@ Example (authored, not a measured call): caller at 12-15s says “Khana garam na
 
 - Boolean `unnecessary_repetition`: false is the desirable outcome; true indicates failure. Confirm polarity in the schema rather than treating every true as PASS.
 - Numeric `repeated_agent_turn_count` and candidate repeated-phrase counts with matched turn IDs.
-- Proposed ordinal `repetition_severity`: 0 none; 1 a single avoidable repeated request/statement; 2 persistent looping that obstructs feedback. Grade each anchor explicitly.
+- Proposed quality grade: 0 needs improvement, 1 partial, 2 meets expectations. Repeated-turn counts remain separate numeric measurements so the grade never reverses into a severity scale.
 
 Candidate detector: proposed flag when adjacent agent turns have normalized token-bigram Jaccard similarity at least 0.8, or an already-answered question reappears. The judge/reviewer must establish avoidability. This threshold is a triage heuristic, not the verdict. Legitimate readback, clarification after noise, repetition requested by caller, and mandatory repeated wording from supplied policy are excluded with explanation. Boilerplate greetings alone do not prove scripted behavior. Transcript-only analysis cannot grade prosody or natural voice quality.
 
@@ -45,7 +59,7 @@ Example: caller 7-9s “Haan, order mil gaya”; agent 10-12s “Order receive h
 
 ## C3: conversation flow and feedback capture
 
-C3a `flow_followed` is boolean. C3b `feedback_preserved_in_conversation` is boolean with a proposed ordinal completeness of 0 absent/distorted, 1 partial, 2 sufficient for the caller's stated issue. Evaluate submetrics separately. C3 overall uses the call-level rule above across eligible submetrics, while displaying both results.
+C3a `flow_followed` is boolean. The implemented C3 quality grade uses 0 needs improvement, 1 partial, and 2 meets expectations. Future C3b `feedback_preserved_in_conversation` should use the same quality direction. Evaluate submetrics separately. C3 overall uses the call-level rule above across eligible submetrics, while displaying both results.
 
 | Scenario | Expected observable behavior | Not acceptable / uncertainty |
 |---|---|---|
@@ -66,7 +80,7 @@ Proposed critical gate G-01: after clear non-delivery, do not assert receipt or 
 
 - Numeric `agent_turn_word_count`, `agent_turn_duration_seconds`, median/max across eligible complete turns; attach normalization and timing granularity.
 - Boolean `excessive_length`: proposed candidate true when a turn exceeds 60 whitespace-delimited words or 20 seconds. Report each exceeded limit separately. These are proposed initial guardrails to calibrate, not speech science or source-backed thresholds.
-- Proposed ordinal `verbosity_severity`: 0 concise/relevant, 1 avoidable excess without loss of task, 2 long/repetitive content obstructs caller participation. Semantic relevance is judged separately from the measured length flag.
+- Proposed quality grade: 0 needs improvement, 1 partial, 2 meets expectations. Semantic relevance is judged separately from the measured length flag and deterministic counts.
 
 Count Unicode-normalized text with a documented tokenizer; retain original text. For complete well-attributed turns, word count is a direct transcript measurement, conditional on ASR quality. Duration from chunk boundaries is an approximate proxy; precise acoustic duration requires validated boundaries. A chunk over the proposed time limit is a review flag; if a reliable turn boundary is missing, the duration verdict is UNKNOWN rather than automatic FAIL. Count and relevance can still be reported independently. Do not penalize a required explanation without a policy-aware note; do not silently redefine the numeric threshold after seeing the result.
 

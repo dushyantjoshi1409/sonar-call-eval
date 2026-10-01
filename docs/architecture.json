@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Persistence Voice Eval - Local Architecture",
+    "locale": "en",
+    "quality_profile": "showcase",
+    "viewBox": [1250, 660],
+    "views": [
+      {
+        "id": "upload-path",
+        "label": "Upload and persistence",
+        "focus": ["browser", "api", "jobs", "media", "storage", "review"],
+        "note": "Validated audio and scenario inputs are persisted locally before processing."
+      },
+      {
+        "id": "evaluation-path",
+        "label": "Evaluation path",
+        "focus": ["worker", "gemini", "review", "evaluator", "reference", "report"],
+        "note": "Async transcription stops at review; semantic judging is a separate synchronous call."
+      }
+    ]
+  },
+  "components": [
+    {"id": "browser", "type": "frontend", "label": "Browser workspace", "sublabel": "Upload, role review, playback", "pos": [15, 300], "size": [150, 72]},
+    {"id": "api", "type": "backend", "label": "FastAPI routers", "sublabel": "Loopback HTTP + schemas", "tag": "same-origin", "pos": [190, 300], "size": [150, 72]},
+    {"id": "jobs", "type": "backend", "label": "Job service", "sublabel": "Use-case coordination", "pos": [364, 300], "size": [150, 72]},
+    {"id": "media", "type": "security", "label": "Media validator", "sublabel": "Signature + ffprobe/decode", "pos": [360, 80], "size": [150, 72]},
+    {"id": "storage", "type": "database", "label": "Local durable storage", "sublabel": "SQLite + private audio", "tag": "jobs, revisions, runs", "pos": [190, 500], "size": [170, 72]},
+    {"id": "worker", "type": "backend", "label": "Persisted single worker", "sublabel": "Background transcription only", "pos": [395, 500], "size": [170, 72]},
+    {"id": "gemini", "type": "external", "label": "Gemini Developer API", "sublabel": "Optional free-tier STT + judge", "tag": "REMOTE · explicit opt-in", "pos": [620, 500], "size": [180, 72]},
+    {"id": "review", "type": "security", "label": "Human review gate", "sublabel": "Confirm speakers, words, timing", "tag": "required after STT", "pos": [620, 300], "size": [180, 72]},
+    {"id": "evaluator", "type": "backend", "label": "Evaluation engine", "sublabel": "Evidence checks + metrics", "pos": [830, 300], "size": [170, 72]},
+    {"id": "reference", "type": "external", "label": "Trusted human reference", "sublabel": "Audio-matched WER/CER", "pos": [830, 500], "size": [170, 72]},
+    {"id": "report", "type": "frontend", "label": "Validated report", "sublabel": "Boolean | grade | numeric", "tag": "no aggregate score", "pos": [1070, 300], "size": [165, 72]}
+  ],
+  "connections": [
+    {"id": "browser-api", "from": "browser", "to": "api", "variant": "emphasis"},
+    {"id": "api-jobs", "from": "api", "to": "jobs", "variant": "emphasis"},
+    {"id": "jobs-media", "from": "jobs", "to": "media", "variant": "security", "fromSide": "top", "toSide": "bottom"},
+    {"id": "jobs-storage", "from": "jobs", "to": "storage", "fromSide": "bottom", "toSide": "top"},
+    {"id": "jobs-worker", "from": "jobs", "to": "worker", "variant": "dashed", "fromSide": "bottom", "toSide": "top"},
+    {"id": "storage-worker", "from": "storage", "to": "worker", "variant": "dashed"},
+    {"id": "worker-gemini", "from": "worker", "to": "gemini", "label": "async STT", "variant": "dashed"},
+    {"id": "gemini-review", "from": "gemini", "to": "review", "label": "model transcript · review required", "variant": "dashed", "fromSide": "top", "toSide": "bottom", "labelDx": 80},
+    {"id": "jobs-gemini", "from": "jobs", "to": "gemini", "label": "synchronous semantic judge", "variant": "dashed", "fromSide": "bottom", "toSide": "top"},
+    {"id": "jobs-review", "from": "jobs", "to": "review", "variant": "emphasis"},
+    {"id": "review-evaluator", "from": "review", "to": "evaluator", "variant": "emphasis"},
+    {"id": "reference-evaluator", "from": "reference", "to": "evaluator"},
+    {"id": "evaluator-report", "from": "evaluator", "to": "report", "variant": "emphasis"}
+  ],
+  "cards": [
+    {"dot": "cyan", "title": "Three typed result families", "items": ["Strict nullable Yes/No with declared polarity", "Proposed 0-2 grade and classification", "Finite measurements plus WER/CER edit counts"]},
+    {"dot": "emerald", "title": "Evidence contract", "items": ["Exact quote offsets resolve against stored segments", "At most 20 sampled excerpts; full counts use every eligible turn", "UNKNOWN never becomes success or numeric zero"]},
+    {"dot": "amber", "title": "Free-only boundary", "items": ["Manual transcript and synthetic demo work offline", "Gemini requires explicit free-tier confirmation", "No paid fallback or invented backend action proof"]}
+  ]
+}

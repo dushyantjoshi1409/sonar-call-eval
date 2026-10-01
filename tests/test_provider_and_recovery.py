@@ -7,6 +7,8 @@ from typing import Any
 import httpx
 import pytest
 
+from voice_eval.domain import Segment
+from voice_eval.profiles import get_preset
 from voice_eval.providers import (
     GeminiAdapter,
     ProviderAmbiguousSubmit,
@@ -79,6 +81,123 @@ def test_provider_response_size_is_bounded(tmp_path: Path) -> None:
     )
     with pytest.raises(ProviderError, match="5 MiB"):
         adapter.transcribe(audio, "audio/mpeg")
+
+
+def test_provider_judge_validates_boolean_polarity_and_grade() -> None:
+    segments = [
+        Segment(id="s1", speaker="customer", text="Order nahi mila"),
+        Segment(id="s2", speaker="agent", text="I understand order nahi mila"),
+    ]
+    findings = [
+        {
+            "metric_id": "semantic_uptake",
+            "verdict": "PASS",
+            "rationale": "The reply preserves the caller's negation.",
+            "evidence": [
+                {"segment_id": "s1", "quote": "nahi", "start_char": 6, "end_char": 10}
+            ],
+            "boolean_result": {
+                "name": "meaning_respected",
+                "value": True,
+                "pass_when": True,
+                "measurement_kind": "schema_judge",
+            },
+            "grade_result": {
+                "scale": "proposed-quality-v1",
+                "value": 2,
+                "classification": "MEETS_EXPECTATIONS",
+                "measurement_kind": "schema_judge",
+            },
+            "measurements": [],
+        },
+        {
+            "metric_id": "unnecessary_repetition",
+            "verdict": "PASS",
+            "rationale": "No avoidable repeat was present.",
+            "evidence": [
+                {
+                    "segment_id": "s2",
+                    "quote": "I understand",
+                    "start_char": 0,
+                    "end_char": 12,
+                }
+            ],
+            "boolean_result": {
+                "name": "unnecessary_repetition",
+                "value": False,
+                "pass_when": False,
+                "measurement_kind": "schema_judge",
+            },
+            "grade_result": {
+                "scale": "proposed-quality-v1",
+                "value": 2,
+                "classification": "MEETS_EXPECTATIONS",
+                "measurement_kind": "schema_judge",
+            },
+            "measurements": [],
+        },
+        {
+            "metric_id": "scenario_flow",
+            "verdict": "UNKNOWN",
+            "rationale": "Configured flow needs more context.",
+            "evidence": [],
+            "boolean_result": {
+                "name": "flow_followed",
+                "value": None,
+                "pass_when": True,
+                "measurement_kind": "schema_judge",
+            },
+            "grade_result": {
+                "scale": "proposed-quality-v1",
+                "value": None,
+                "classification": None,
+                "measurement_kind": "schema_judge",
+            },
+            "measurements": [],
+        },
+    ]
+
+    def response_for(payload: list[dict[str, Any]]) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "candidates": [
+                    {"content": {"parts": [{"text": json.dumps({"findings": payload})}]}}
+                ]
+            },
+        )
+
+    adapter = GeminiAdapter(
+        "secret-not-logged",
+        "gemini-3.5-flash-lite",
+        FakeTransport(response_for(findings)),
+    )
+    result = adapter.judge(segments, get_preset("food-delivery"))
+    repetition = next(
+        item for item in result.findings if item.metric_id == "unnecessary_repetition"
+    )
+    assert repetition.boolean_result is not None
+    assert repetition.boolean_result.value is False
+
+    invalid = json.loads(json.dumps(findings))
+    invalid[1]["boolean_result"]["value"] = True
+    invalid_adapter = GeminiAdapter(
+        "secret-not-logged",
+        "gemini-3.5-flash-lite",
+        FakeTransport(response_for(invalid)),
+    )
+    with pytest.raises(ProviderError, match="schema validation"):
+        invalid_adapter.judge(segments, get_preset("food-delivery"))
+
+    invalid_grade = json.loads(json.dumps(findings))
+    invalid_grade[0]["grade_result"]["value"] = True
+    invalid_grade_adapter = GeminiAdapter(
+        "secret-not-logged",
+        "gemini-3.5-flash-lite",
+        FakeTransport(response_for(invalid_grade)),
+    )
+    with pytest.raises(ProviderError, match="schema validation"):
+        invalid_grade_adapter.judge(segments, get_preset("food-delivery"))
 
 
 def test_store_recovers_claim_and_prevents_late_write_after_delete(tmp_path: Path) -> None:
