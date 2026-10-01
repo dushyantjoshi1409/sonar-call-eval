@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>{% block title %}Persistence Voice Eval{% endblock %}</title>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="Persistence Voice Eval home"><span class="mark" aria-hidden="true"></span>Persistence <small>Voice Eval</small></a>
+    <span class="local-pill">Local only</span>
+  </header>
+  <main>{% block content %}{% endblock %}</main>
+  <footer>Evidence-linked call review. No aggregate score. Unknown is never success.</footer>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

@@ -1,0 +1,18 @@
+[
+  {
+    "id": "food-1",
+    "speaker": "customer",
+    "start": 0.0,
+    "end": 2.0,
+    "text": "Order nahi mila.",
+    "precision": "manual"
+  },
+  {
+    "id": "food-2",
+    "speaker": "agent",
+    "start": 2.0,
+    "end": 4.0,
+    "text": "How was the food?",
+    "precision": "manual"
+  }
+]

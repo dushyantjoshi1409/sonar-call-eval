@@ -1,0 +1,18 @@
+[
+  {
+    "id": "dental-1",
+    "speaker": "customer",
+    "start": 0.0,
+    "end": 3.0,
+    "text": "I need a cleaning appointment next Tuesday.",
+    "precision": "manual"
+  },
+  {
+    "id": "dental-2",
+    "speaker": "agent",
+    "start": 3.0,
+    "end": 7.0,
+    "text": "I can help with a cleaning appointment next Tuesday.",
+    "precision": "manual"
+  }
+]

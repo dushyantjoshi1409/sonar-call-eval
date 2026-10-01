@@ -1,0 +1,129 @@
+{% extends "base.html" %}
+{% block title %}Evaluation {{ job.id[:8] }} | Persistence{% endblock %}
+{% block content %}
+<section class="report-head">
+  <div>
+    <a href="/" class="back">← New evaluation</a>
+    <p class="eyebrow">Evaluation {{ job.id[:8] }}</p>
+    <h1>{{ job.profile.name }}</h1>
+    <p>{{ job.profile.expected_outcome }}</p>
+  </div>
+  <div class="status-card"><span class="status-dot status-{{ job.status }}"></span><div><small>Status</small><strong id="job-status">{{ job.status | replace('_', ' ') }}</strong><p id="status-detail">{{ job.status_detail }}</p></div></div>
+</section>
+
+{% if job.fixture %}<div class="fixture-banner"><strong>Synthetic fixture</strong> This report uses authored text and silent audio. It is not a transcription or evaluation of your upload.</div>{% endif %}
+
+<section class="report-layout">
+  <div class="stack">
+    <section class="panel player-card">
+      <div class="section-title"><div><p class="eyebrow">Source recording</p><h2>{{ job.original_name }}</h2></div><span>{{ '%.1f' | format(job.media.duration_seconds) }}s · {{ job.media.channels }} channel{% if job.media.channels != 1 %}s{% endif %}</span></div>
+      <audio id="audio-player" controls preload="metadata" src="/api/jobs/{{ job.id }}/audio"></audio>
+      <p class="helper">Evidence links seek to stored transcript timestamps. Model-estimated boundaries are approximate and require review.</p>
+    </section>
+
+    <section class="panel">
+      <div class="section-title"><div><p class="eyebrow">Transcript revision {{ job.transcript_revision }}</p><h2>Review speakers and words</h2></div><button id="save-transcript" class="secondary" type="button" {% if not job.transcript %}hidden{% endif %}>Save revision</button></div>
+      {% if job.transcript %}
+      <div id="transcript" class="transcript-list">
+        {% for segment in job.transcript %}
+        <article class="transcript-turn" data-id="{{ segment.id }}" data-start="{{ segment.start if segment.start is not none else '' }}" data-end="{{ segment.end if segment.end is not none else '' }}" data-precision="{{ segment.precision }}">
+          <div class="turn-meta">
+            <select aria-label="Speaker for {{ segment.id }}">
+              {% for role in ['agent','customer','other','unknown'] %}<option value="{{ role }}" {% if segment.speaker == role %}selected{% endif %}>{{ role }}</option>{% endfor %}
+            </select>
+            <button class="time-link" type="button">{% if segment.start is not none %}{{ '%.1f' | format(segment.start) }}s{% else %}no time{% endif %}</button>
+            <span>{{ segment.precision | replace('_',' ') }}</span>
+          </div>
+          <textarea rows="2" aria-label="Transcript text for {{ segment.id }}">{{ segment.text }}</textarea>
+        </article>
+        {% endfor %}
+      </div>
+      {% else %}
+      <div class="empty-state"><div>⌁</div><h3>Transcript required</h3><p>{{ job.status_detail }}. Return to the upload form and provide reviewed segment JSON, or configure an eligible Gemini free-tier project.</p></div>
+      {% endif %}
+    </section>
+  </div>
+
+  <aside class="stack">
+    <section class="panel action-card">
+      <p class="eyebrow">Scenario snapshot</p>
+      <h2>{{ job.profile.name }}</h2>
+      <p>{{ job.profile.task_description }}</p>
+      <dl><dt>Expected outcome</dt><dd>{{ job.profile.expected_outcome }}</dd><dt>Required information</dt><dd>{{ job.profile.required_information | join(', ') }}</dd><dt>Profile hash</dt><dd class="mono">{{ job.profile_hash[:14] }}…</dd></dl>
+      {% if job.transcript %}<button id="evaluate-button" class="primary" type="button">{% if job.report %}Create version {{ job.run_version + 1 }}{% else %}Run evaluation{% endif %}</button>{% endif %}
+    </section>
+    <section class="panel coverage-card">
+      <p class="eyebrow">Evidence coverage</p>
+      <div id="coverage">
+        {% if job.report %}
+        <span><b>{{ job.report.coverage.transcript_segments }}</b> transcript segments</span>
+        <span><b>{{ job.report.coverage.timed_segments }}</b> timestamped segments</span>
+        <span><b>{{ 'Yes' if job.report.coverage.mapped_speakers else 'No' }}</b> roles mapped</span>
+        {% else %}<p class="muted">Coverage appears after evaluation.</p>{% endif %}
+      </div>
+    </section>
+  </aside>
+</section>
+
+{% if job.report %}
+<section class="results-section">
+  <div class="section-title"><div><p class="eyebrow">Run version {{ job.report.run_version }}</p><h2>Independent findings</h2><p>No weighted or aggregate score is produced.</p></div><a class="button secondary" href="/api/jobs/{{ job.id }}/export">Export JSON</a></div>
+  <div class="findings-grid">
+  {% for finding in job.report.findings %}
+    <article class="finding panel">
+      <div class="finding-head"><span class="verdict verdict-{{ finding.verdict | lower }}">{{ finding.verdict | replace('_',' ') }}</span><span class="metric-id">{{ finding.metric_id | replace('_',' ') }}</span></div>
+      <h3>{{ finding.rationale }}</h3>
+      {% if finding.value %}<div class="value-row">{% for key,value in finding.value.items() %}<span><small>{{ key | replace('_',' ') }}</small><b>{{ value if value is not none else 'unknown' }}</b></span>{% endfor %}</div>{% endif %}
+      <div class="evidence-list">{% for evidence in finding.evidence %}<button type="button" class="evidence-link" data-segment="{{ evidence.segment_id }}"><span>{{ evidence.segment_id }}</span> “{{ evidence.quote }}”</button>{% endfor %}</div>
+    </article>
+  {% endfor %}
+  </div>
+  {% if job.report.wer %}
+  <section class="panel wer-card"><p class="eyebrow">Trusted-reference observations</p><h2>WER {{ '%.3f' | format(job.report.wer.value) }} · CER {{ '%.3f' | format(job.report.cer.value) }}</h2><p>No acceptance threshold is defined. CER counts Unicode code points, not Hindi grapheme clusters.</p><div class="value-row"><span><small>Word substitutions</small><b>{{ job.report.wer.substitutions }}</b></span><span><small>Word deletions</small><b>{{ job.report.wer.deletions }}</b></span><span><small>Word insertions</small><b>{{ job.report.wer.insertions }}</b></span><span><small>Reference words</small><b>{{ job.report.wer.reference_units }}</b></span><span><small>Reference code points</small><b>{{ job.report.cer.reference_units }}</b></span></div></section>
+  {% endif %}
+  <section class="panel unknown-card"><p class="eyebrow">Missing context and limits</p><h2>What this run cannot prove</h2><ul>{% for unknown in job.report.unknowns %}<li>{{ unknown }}</li>{% endfor %}</ul></section>
+</section>
+{% endif %}
+
+<section class="danger-row"><button id="delete-button" class="danger" type="button">Delete local recording and results</button><span>Deletion cannot retract data already sent to an external provider.</span></section>
+<div id="page-error" class="toast" role="alert" hidden></div>
+{% endblock %}
+{% block scripts %}
+<script>
+const jobId = {{ job.id | tojson }};
+const audio = document.getElementById('audio-player');
+document.querySelectorAll('.time-link').forEach(button => button.addEventListener('click', () => {
+  const start = Number(button.closest('[data-start]').dataset.start); if (Number.isFinite(start)) { audio.currentTime = start; audio.play(); }
+}));
+document.querySelectorAll('.evidence-link').forEach(button => button.addEventListener('click', () => {
+  const turn = document.querySelector(`[data-id="${CSS.escape(button.dataset.segment)}"]`); if (!turn) return;
+  turn.scrollIntoView({behavior:'smooth', block:'center'}); turn.classList.add('focused'); setTimeout(() => turn.classList.remove('focused'), 1800);
+  const start = Number(turn.dataset.start); if (Number.isFinite(start)) audio.currentTime = start;
+}));
+function showError(message) { const toast = document.getElementById('page-error'); toast.textContent = message; toast.hidden = false; }
+document.getElementById('save-transcript')?.addEventListener('click', async () => {
+  const segments = [...document.querySelectorAll('.transcript-turn')].map(turn => {
+    const start = turn.dataset.start === '' ? null : Number(turn.dataset.start);
+    const end = turn.dataset.end === '' ? null : Number(turn.dataset.end);
+    return {id:turn.dataset.id, speaker:turn.querySelector('select').value, start, end, text:turn.querySelector('textarea').value, precision:'manual'};
+  });
+  const response = await fetch(`/api/jobs/${jobId}/transcript`, {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(segments)});
+  if (!response.ok) { const body=await response.json(); showError(body.detail); return; } location.reload();
+});
+document.getElementById('evaluate-button')?.addEventListener('click', async event => {
+  event.currentTarget.disabled = true; event.currentTarget.textContent = 'Evaluating…';
+  const response = await fetch(`/api/jobs/${jobId}/evaluate`, {method:'POST'});
+  if (!response.ok) { const body=await response.json(); showError(body.detail); event.currentTarget.disabled=false; return; } location.reload();
+});
+document.getElementById('delete-button').addEventListener('click', async () => {
+  if (!confirm('Delete the local recording, transcript, and reports? This cannot be undone.')) return;
+  const response = await fetch(`/api/jobs/${jobId}`, {method:'DELETE'}); if (!response.ok) { showError('Deletion failed'); return; } window.location.assign('/');
+});
+{% if job.status in ['queued', 'transcribing'] %}
+setInterval(async () => {
+  const response = await fetch(`/api/jobs/${jobId}`); if (!response.ok) return;
+  const latest = await response.json(); if (latest.status !== {{ job.status | tojson }}) location.reload();
+}, 1500);
+{% endif %}
+</script>
+{% endblock %}

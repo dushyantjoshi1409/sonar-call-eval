@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "persistence-voice-eval"
+version = "0.1.0"
+description = "Local, evidence-linked voice call evaluation"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi==0.118.0",
+  "httpx==0.28.1",
+  "jiwer==4.0.0",
+  "jinja2==3.1.6",
+  "pydantic-settings==2.10.1",
+  "python-multipart==0.0.20",
+  "uvicorn==0.37.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "mypy==1.18.2",
+  "pytest==8.4.2",
+  "pytest-asyncio==1.2.0",
+  "ruff==0.13.2",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+packages = ["voice_eval"]
+
+[tool.setuptools.package-data]
+voice_eval = ["templates/*.html", "static/*"]
+
+[tool.setuptools]
+packages = ["voice_eval"]

@@ -1,0 +1,118 @@
+{% extends "base.html" %}
+{% block title %}Start an evaluation | Persistence{% endblock %}
+{% block content %}
+<section class="hero">
+  <div>
+    <p class="eyebrow">Voice quality workspace</p>
+    <h1>Turn any call into evidence for improvement.</h1>
+    <p class="lead">Upload a recording, describe what a good call should accomplish, and review every finding against the source conversation.</p>
+  </div>
+  <div class="pipeline" aria-label="Evaluation stages">
+    <span><b>1</b> Upload</span><i></i><span><b>2</b> Review transcript</span><i></i><span><b>3</b> Inspect findings</span>
+  </div>
+</section>
+
+<section class="workspace-grid">
+  <form id="upload-form" class="panel stack" enctype="multipart/form-data">
+    <div>
+      <p class="eyebrow">New evaluation</p>
+      <h2>Start with the recording</h2>
+    </div>
+    <label class="dropzone" for="audio">
+      <span class="upload-icon" aria-hidden="true">↑</span>
+      <strong>Choose WAV, MP3, or M4A</strong>
+      <span>Up to 100 MiB and 20 minutes. Audio stays in local storage unless Gemini is explicitly enabled.</span>
+      <input id="audio" name="audio" type="file" accept="audio/wav,audio/mpeg,audio/mp4,.wav,.mp3,.m4a" required>
+    </label>
+    <div class="field-row">
+      <label>Scenario preset
+        <select id="profile-select">
+          {% for preset in presets %}<option value="{{ preset.id }}">{{ preset.name }}</option>{% endfor %}
+          <option value="custom">Custom profile</option>
+        </select>
+      </label>
+      <label>Transcript source
+        <select id="transcript-mode">
+          <option value="manual">Import reviewed JSON</option>
+          <option value="provider">Use Gemini if configured</option>
+        </select>
+      </label>
+    </div>
+    <details class="editor-card">
+      <summary>Edit scenario requirements</summary>
+      <p class="helper">The exact version below is validated, hashed, and frozen into each run.</p>
+      <textarea id="profile-json" name="profile_json" rows="13" spellcheck="false"></textarea>
+    </details>
+    <div id="transcript-wrap">
+      <label>Reviewed transcript JSON <span class="optional">optional</span>
+        <textarea id="transcript-json" name="transcript_json" rows="7" spellcheck="false" placeholder='[{"id":"seg-1","speaker":"customer","start":0,"end":3,"text":"...","precision":"manual"}]'></textarea>
+      </label>
+      <p class="helper">Speaker must be agent, customer, other, or unknown. Leave blank for the honest needs-transcript path.</p>
+    </div>
+    <details class="editor-card reference-card">
+        <summary>Add trusted human reference for WER</summary>
+        <label>Audio-matched reference text
+          <textarea name="trusted_reference" rows="4" placeholder="A reviewer-listened transcript of the same audio"></textarea>
+        </label>
+        <label class="check-label"><input name="reference_attested" type="checkbox" value="true"> I listened to this same recording and attest that the reference matches it.</label>
+        <p class="helper">Without this attestation, lexical error rates remain UNKNOWN. Script and negation are preserved.</p>
+    </details>
+    <div id="provider-note" class="notice" hidden>
+      {% if gemini_ready %}<strong>Gemini is ready.</strong> Model timestamps and speaker boundaries will still require review.
+      {% else %}<strong>Gemini is not enabled.</strong> Add the key and confirm the project is free-tier eligible, or import a reviewed transcript.{% endif %}
+    </div>
+    <div id="form-error" class="error" role="alert" hidden></div>
+    <button class="primary" type="submit">Create evaluation</button>
+  </form>
+
+  <aside class="stack">
+    <section class="panel calm-card">
+      <p class="eyebrow">Evaluation contract</p>
+      <h2>Four answers. Each stands alone.</h2>
+      <div class="metric-list">
+        <div><span>01</span><p><strong>Meaning respected?</strong><small>Semantic uptake and negation</small></p></div>
+        <div><span>02</span><p><strong>Unnecessary repetition?</strong><small>Exact repeats plus review context</small></p></div>
+        <div><span>03</span><p><strong>Scenario flow?</strong><small>Your configured requirements</small></p></div>
+        <div><span>04</span><p><strong>Response too long?</strong><small>Complete agent turns only</small></p></div>
+      </div>
+    </section>
+    <section class="panel demo-card">
+      <div><p class="eyebrow">No key needed</p><h2>Explore a labelled demo</h2><p>Creates silent synthetic audio, a synthetic dental transcript, and a report. It never stands in for your uploaded recording.</p></div>
+      <button id="demo-button" class="secondary" type="button">Open synthetic demo</button>
+    </section>
+  </aside>
+</section>
+{% endblock %}
+{% block scripts %}
+<script>
+const presets = {{ presets | tojson }};
+const select = document.getElementById('profile-select');
+const editor = document.getElementById('profile-json');
+const transcriptMode = document.getElementById('transcript-mode');
+const transcriptWrap = document.getElementById('transcript-wrap');
+const providerNote = document.getElementById('provider-note');
+function setProfile() {
+  if (select.value !== 'custom') editor.value = JSON.stringify(presets.find(p => p.id === select.value), null, 2);
+}
+function setTranscriptMode() {
+  const provider = transcriptMode.value === 'provider';
+  transcriptWrap.hidden = provider;
+  providerNote.hidden = !provider;
+  document.getElementById('transcript-json').value = provider ? '' : document.getElementById('transcript-json').value;
+}
+setProfile(); select.addEventListener('change', setProfile); transcriptMode.addEventListener('change', setTranscriptMode);
+async function submitAndOpen(endpoint, options) {
+  const error = document.getElementById('form-error'); error.hidden = true;
+  const response = await fetch(endpoint, options); const body = await response.json();
+  if (!response.ok) { error.textContent = body.detail || 'Unable to create evaluation'; error.hidden = false; return; }
+  window.location.assign(`/jobs/${body.id}`);
+}
+document.getElementById('upload-form').addEventListener('submit', event => {
+  event.preventDefault(); const data = new FormData(event.currentTarget);
+  submitAndOpen('/api/jobs', {method:'POST', body:data, headers:{'Idempotency-Key':crypto.randomUUID()}});
+});
+document.getElementById('demo-button').addEventListener('click', event => {
+  event.currentTarget.disabled = true; submitAndOpen('/api/demo', {method:'POST'});
+});
+</script>
+{% endblock %}
