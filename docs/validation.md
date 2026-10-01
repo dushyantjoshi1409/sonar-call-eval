@@ -12,9 +12,9 @@ Run from the repository root:
 .venv/bin/mypy voice_eval
 ```
 
-The 58-test suite covers the existing upload-review-evaluate-export-delete path plus the provider and regression seams added in version 1.2. New contract tests use mock HTTP transports only. They verify OpenAI-compatible chat and multipart transcription payloads, unknown speaker output, strict evidence validation, unsupported custom transcription, typed 401/429/timeout handling, secret-safe errors, custom endpoint rejection, credential isolation/expiry/clear/restart behavior, free-tier and paid-use gates, captured job credentials, no-key regression behavior, immutable scenario snapshots, persistence, and compatible or rejected-incompatible baseline comparison.
+The 62-test suite covers the existing upload-review-evaluate-export-delete path plus the provider and regression seams added in version 1.2. New contract tests use mock HTTP transports only. They verify Gemini media normalization, OpenAI-compatible chat and multipart transcription payloads, unknown speaker output, strict evidence validation, unsupported custom transcription, typed 400/401/429/timeout handling, secret-safe errors, custom endpoint rejection, credential isolation/expiry/clear/restart behavior, free-tier and paid-use gates, captured job credentials, no-key regression behavior, immutable scenario snapshots, persistence, compatible or rejected-incompatible baseline comparison, and distinct missing-transcript versus failed-transcription UI states.
 
-No real provider request was made. Passing mock tests are not evidence that a live Gemini, OpenAI, Groq, or custom account is configured or remotely verified.
+Automated validation made no provider request. Passing mock tests are not evidence that a live Gemini, OpenAI, Groq, or custom account is configured or remotely verified.
 
 ## Browser acceptance
 
@@ -24,6 +24,7 @@ The preview ran at `http://127.0.0.1:8011` with ignored SQLite/media storage and
 - Session-only connect/clear behavior using a dummy Groq key. The UI labelled the session configured but not remotely verified, cleared the password field, and never exposed the key in a snapshot or screenshot.
 - Cost controls: Gemini/Groq free-tier attestation is explicit; OpenAI/custom require session-only paid-use opt-in.
 - A manual transcript workflow created through the local upload API with synthetic audio, then reviewed in Chrome. The reviewer changed a turn boundary from 3.0 to 2.8 seconds, saved revision 2, and ran the offline evaluator. C1-C3 remained UNKNOWN; deterministic response length passed. The browser automation upload helper was not used because it rejected its documented file-list argument.
+- After the reported Gemini 400, the fixed preview restarted on port 8011 with the same ignored data paths and no environment credential. HTTP checks returned 200 for the root and a preserved failed job; session metadata returned disconnected. The failed job now renders `Automatic transcription failed` with reconnect/retry/import guidance. Chrome verified the state at desktop and 390 px with no horizontal overflow.
 - Two user-initiated six-case regression runs. The first persisted as an offline baseline; the second selected that compatible baseline and showed semantic checks as unresolved and deterministic checks as unchanged.
 - Desktop at 1280x900 and mobile at an emulated 390x844 viewport. Document width equalled viewport width with no horizontal overflow, and the console had no errors.
 
@@ -46,7 +47,8 @@ The diagram distinguishes the in-memory credential boundary, provider-specific t
 ## Compatibility and known limits
 
 - Live-key validation remains outstanding for every provider. A saved browser credential means configured, not remotely verified.
-- Gemini preserves the existing audio-plus-judge flow with a 70 MiB inline limit. OpenAI and Groq transcription uses their multipart endpoint with a 25 MiB payload limit. Custom endpoints are intentionally chat-only.
+- Gemini audio is locally normalized to metadata-free 16 kHz mono PCM WAV and capped at 14 MiB before base64 encoding, leaving room under Gemini's documented 20 MB total inline-request limit. OpenAI and Groq transcription uses their multipart endpoint with a 25 MiB payload limit. Custom endpoints are intentionally chat-only.
+- A user-initiated Gemini request returned HTTP 400 for an MP3 containing an attached image stream. Without a controlled provider replay of original and normalized bytes under the same session, causality remains unconfirmed. Normalization is a robustness improvement, and mock-contract tests verify the exact outbound WAV MIME and bytes. Safe diagnostics classify only allowlisted structured upstream status/reason codes; arbitrary messages and metadata stay hidden. The implementation worker did not access a key or initiate a live request, so a user-authorized retry remains outstanding.
 - Transcription segments from OpenAI-compatible providers use unknown speakers and require review; the app does not claim diarization.
 - Gemini/Groq free-tier eligibility is never inferred from key presence. OpenAI/custom services are not labelled free and require explicit paid-use opt-in.
 - Session credentials live only in process memory, expire after one hour by default, and disappear on clear or restart. A provider request already in flight may finish after clear.

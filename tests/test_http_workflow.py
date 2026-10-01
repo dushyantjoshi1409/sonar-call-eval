@@ -163,6 +163,31 @@ def test_real_audio_without_transcript_or_key_needs_transcript(
     )
 
 
+def test_job_page_distinguishes_missing_transcript_from_provider_failure(
+    client: TestClient, wav_bytes: bytes, dental_profile: dict[str, object]
+) -> None:
+    created = client.post(
+        "/api/jobs",
+        files={"audio": ("appointment.wav", wav_bytes, "audio/wav")},
+        data={"profile_json": json.dumps(dental_profile)},
+    )
+    job_id = created.json()["id"]
+
+    missing = client.get(f"/jobs/{job_id}")
+    assert "Transcript required" in missing.text
+    assert "Automatic transcription failed" not in missing.text
+
+    client.app.state.runtime.store.update(
+        job_id,
+        status="failed",
+        status_detail="invalid_provider_request: selected provider rejected the request",
+    )
+    failed = client.get(f"/jobs/{job_id}")
+    assert "Automatic transcription failed" in failed.text
+    assert "Reconnect the selected provider" in failed.text
+    assert "Transcript required" not in failed.text
+
+
 def test_demo_storage_failure_removes_generated_media(
     client: TestClient, monkeypatch: MonkeyPatch
 ) -> None:

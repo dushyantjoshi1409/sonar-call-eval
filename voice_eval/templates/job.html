@@ -41,7 +41,15 @@
         {% endfor %}
       </div>
       {% else %}
-      <div class="empty-state"><div>⌁</div><h3>Transcript required</h3><p>{{ job.status_detail }}. Return to the upload form and provide reviewed segment JSON, or configure an eligible Gemini free-tier project.</p></div>
+      <div class="empty-state"><div>⌁</div>
+        {% if job.status == 'failed' %}
+        <h3>Automatic transcription failed</h3>
+        <p>{{ job.status_detail }}. Reconnect the selected provider, verify the model, then create a new evaluation to retry. You can also import reviewed segment JSON.</p>
+        {% else %}
+        <h3>Transcript required</h3>
+        <p>{{ job.status_detail }}. Return to the upload form, connect an audio-capable provider, or import reviewed segment JSON.</p>
+        {% endif %}
+      </div>
       {% endif %}
     </section>
   </div>

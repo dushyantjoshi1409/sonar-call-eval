@@ -22,7 +22,7 @@
 
 `POST /api/provider-session` accepts `provider`, `api_key`, `judge_model`, optional `transcription_model` and `base_url`, plus `free_tier_attested` and `allow_paid_use`. The response never contains the key or credential handle. The cookie selects one isolated in-memory credential; jobs capture an internal opaque handle so later session changes cannot switch an in-flight job to another key. Clear, expiry, or restart makes future use fail with a reconnect instruction. An already submitted synchronous request may still finish.
 
-Custom base URLs must use HTTPS, contain no userinfo/query/fragment, and resolve only to public IP addresses. Custom is chat-only. Gemini, OpenAI, and Groq have distinct reviewed audio payloads rather than one assumed compatibility contract.
+Custom base URLs must use HTTPS, contain no userinfo/query/fragment, and resolve only to public IP addresses. Custom is chat-only. Gemini, OpenAI, and Groq have distinct reviewed audio payloads rather than one assumed compatibility contract. Gemini input is normalized locally to 16 kHz mono PCM WAV and capped at 14 MiB before base64 encoding so the complete inline request remains below the documented 20 MB limit.
 
 Regression results distinguish the call `actual` verdict from the expectation `outcome`: `met`, `mismatched`, `unresolved`, or `error`. Baseline `comparison` is `improved`, `newly_failing`, `unchanged`, or `unresolved`. Suite, prompt, and rubric versions must match. No aggregate is produced.
 

@@ -34,12 +34,12 @@ Open <http://127.0.0.1:8000>. Fixture/demo mode and reviewed transcript imports 
 
 The upload page accepts a Gemini, OpenAI, Groq, or custom OpenAI-compatible key. The key is held only in process memory behind an opaque HttpOnly SameSite cookie, expires after one hour by default, and is removed by Clear or server restart. It is never written to SQLite, `.env`, exports, URLs, browser storage, or provider error messages. Saving a key means configured, not remotely verified.
 
-- Gemini preserves the existing inline-audio and schema-constrained judge flow. The reviewed inline limit is 70 MiB.
+- Gemini converts uploads to metadata-free 16 kHz mono PCM WAV before its inline-audio request. The adapter caps normalized audio at 14 MiB so base64 audio, prompts, and schemas remain below Gemini's documented 20 MB total inline-request limit.
 - OpenAI uses Chat Completions structured output and multipart `/audio/transcriptions`; the reviewed default transcription contract is `whisper-1`, `verbose_json`, and a 25 MiB file limit.
 - Groq uses its OpenAI-compatible Chat Completions endpoint plus its documented multipart transcription endpoint; the default transcription model is `whisper-large-v3-turbo` with a 25 MiB free-tier file limit.
 - Custom endpoints must be public HTTPS OpenAI-compatible base URLs with no embedded auth, query, or fragment. They are deliberately chat-only, so audio requires a reviewed transcript import.
 
-Gemini and Groq require an explicit free-tier eligibility attestation. OpenAI and custom services have unknown cost and require a separate session-only paid-use opt-in, off by default. There is no implicit provider or paid fallback. HTTP 401/403, 429, redirects, timeouts, malformed output, and unsupported transcription remain distinct safe failures; ambiguous submissions are not retried.
+Gemini and Groq require an explicit free-tier eligibility attestation. OpenAI and custom services have unknown cost and require a separate session-only paid-use opt-in, off by default. There is no implicit provider or paid fallback. HTTP 400/422 invalid media or model settings, 401/403 authentication, 429 rate limits, redirects, timeouts, malformed output, and unsupported transcription remain distinct safe failures; upstream bodies are not exposed and ambiguous submissions are not retried.
 
 The `.env` Gemini settings remain as a backward-compatible fallback when no browser session is selected. A selected session never borrows the environment key.
 

@@ -5,7 +5,10 @@ from __future__ import annotations
 import json
 import subprocess
 import wave
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from pydantic import BaseModel
 
@@ -25,6 +28,45 @@ class MediaMetadata(BaseModel):
     codec: str
     size_bytes: int
     format_name: str
+
+
+@contextmanager
+def normalized_provider_wave(
+    path: Path, ffmpeg_path: str = "ffmpeg"
+) -> Iterator[Path]:
+    """Yield a metadata-free 16 kHz mono PCM WAV for provider audio input."""
+    with TemporaryDirectory(prefix="voice-eval-provider-") as directory:
+        output = Path(directory) / "audio.wav"
+        command = [
+            ffmpeg_path,
+            "-nostdin",
+            "-v",
+            "error",
+            "-y",
+            "-i",
+            str(path),
+            "-map",
+            "0:a:0",
+            "-vn",
+            "-map_metadata",
+            "-1",
+            "-ac",
+            "1",
+            "-ar",
+            "16000",
+            "-c:a",
+            "pcm_s16le",
+            str(output),
+        ]
+        try:
+            subprocess.run(command, capture_output=True, timeout=60, check=True)
+        except FileNotFoundError as error:
+            raise MediaError("FFmpeg is required to prepare audio for transcription") from error
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+            raise MediaError("Audio could not be prepared for provider transcription") from error
+        if not output.is_file() or output.stat().st_size == 0:
+            raise MediaError("Audio preparation produced no provider-safe audio")
+        yield output
 
 
 class MediaValidator:

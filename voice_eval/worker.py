@@ -80,7 +80,9 @@ class Worker:
         suffix = Path(str(job["media_path"])).suffix.lower()
         mime = {".wav": "audio/wav", ".mp3": "audio/mpeg", ".m4a": "audio/mp4"}[suffix]
         try:
-            with create_provider_adapter(provider) as adapter:
+            with create_provider_adapter(
+                provider, ffmpeg_path=self.settings.ffmpeg_path
+            ) as adapter:
                 result = adapter.transcribe(Path(str(job["media_path"])), mime)
             duration = float(job["media"]["duration_seconds"])
             try:

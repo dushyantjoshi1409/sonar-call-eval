@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import base64
 import json
+import subprocess
+import wave
 from pathlib import Path
 from typing import Any
 
@@ -12,7 +15,9 @@ from voice_eval.profiles import get_preset
 from voice_eval.providers import (
     GeminiAdapter,
     ProviderAmbiguousSubmit,
+    ProviderAuthenticationError,
     ProviderError,
+    ProviderInvalidRequest,
     ProviderRateLimited,
 )
 from voice_eval.store import Store, job_values
@@ -37,7 +42,151 @@ class FakeTransport:
         return self.response
 
 
-def test_provider_rate_limit_and_ambiguous_timeout_are_typed(tmp_path: Path) -> None:
+class CapturingTransport(FakeTransport):
+    def __init__(self, response: httpx.Response) -> None:
+        super().__init__(response)
+        self.body: dict[str, Any] | None = None
+
+    def post(
+        self,
+        url: str,
+        *,
+        headers: dict[str, str],
+        json: dict[str, Any],
+        timeout: float,
+    ) -> httpx.Response:
+        self.body = json
+        return super().post(url, headers=headers, json=json, timeout=timeout)
+
+
+@pytest.fixture
+def fake_pcm_normalizer(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    command: list[str] = []
+
+    def run(arguments: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        command.extend(arguments)
+        output = Path(arguments[-1])
+        with wave.open(str(output), "wb") as audio:
+            audio.setnchannels(1)
+            audio.setsampwidth(2)
+            audio.setframerate(16_000)
+            audio.writeframes(b"\x00\x00" * 160)
+        return subprocess.CompletedProcess(arguments, 0)
+
+    monkeypatch.setattr("voice_eval.media.subprocess.run", run)
+    return command
+
+
+def transcript_response() -> httpx.Response:
+    payload = {
+        "segments": [
+            {
+                "id": "provider-seg-1",
+                "speaker": "unknown",
+                "start": 0,
+                "end": 0.01,
+                "text": "Hello",
+                "precision": "model_estimated",
+            }
+        ],
+        "timestamp_warning": "Review timing and speakers.",
+        "model": "ignored",
+    }
+    return httpx.Response(
+        200,
+        json={"candidates": [{"content": {"parts": [{"text": json.dumps(payload)}]}}]},
+    )
+
+
+def test_gemini_transcription_sends_normalized_pcm_wave(
+    tmp_path: Path, fake_pcm_normalizer: list[str]
+) -> None:
+    audio = tmp_path / "mixed-stream.mp3"
+    audio.write_bytes(b"ID3audio-with-attached-image")
+    transport = CapturingTransport(transcript_response())
+
+    result = GeminiAdapter(
+        "secret-not-logged",
+        "gemini-3.5-flash-lite",
+        transport,
+    ).transcribe(audio, "audio/mpeg")
+
+    assert result.segments[0].text == "Hello"
+    assert fake_pcm_normalizer[:5] == ["ffmpeg", "-nostdin", "-v", "error", "-y"]
+    assert fake_pcm_normalizer[
+        fake_pcm_normalizer.index("-map") : fake_pcm_normalizer.index("-map") + 2
+    ] == ["-map", "0:a:0"]
+    assert "-vn" in fake_pcm_normalizer
+    assert transport.body is not None
+    inline = transport.body["contents"][0]["parts"][0]["inlineData"]
+    assert inline["mimeType"] == "audio/wav"
+    assert base64.b64decode(inline["data"]).startswith(b"RIFF")
+    assert b"attached-image" not in base64.b64decode(inline["data"])
+
+
+def test_provider_rejected_request_is_safe_and_actionable(
+    tmp_path: Path, fake_pcm_normalizer: list[str]
+) -> None:
+    audio = tmp_path / "call.mp3"
+    audio.write_bytes(b"ID3")
+    leaked = "secret-not-logged and private transcript"
+    adapter = GeminiAdapter(
+        "secret-not-logged",
+        "gemini-3.5-flash-lite",
+        FakeTransport(httpx.Response(400, json={"error": {"message": leaked}})),
+    )
+
+    with pytest.raises(ProviderInvalidRequest) as rejected:
+        adapter.transcribe(audio, "audio/mpeg")
+
+    message = str(rejected.value)
+    assert "rejected the submitted content or model settings" in message
+    assert "reviewed transcript" in message
+    assert "secret-not-logged" not in message
+    assert "private transcript" not in message
+
+
+def test_gemini_api_key_reason_on_http_400_is_typed_and_redacted(
+    tmp_path: Path, fake_pcm_normalizer: list[str]
+) -> None:
+    audio = tmp_path / "call.mp3"
+    audio.write_bytes(b"ID3")
+    leaked = "secret-not-logged was rejected for private@example.com"
+    response = httpx.Response(
+        400,
+        json={
+            "error": {
+                "status": "INVALID_ARGUMENT",
+                "message": leaked,
+                "details": [
+                    {
+                        "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                        "reason": "API_KEY_INVALID",
+                        "metadata": {"credential": "secret-not-logged"},
+                    }
+                ],
+            }
+        },
+    )
+    adapter = GeminiAdapter(
+        "secret-not-logged",
+        "gemini-3.5-flash-lite",
+        FakeTransport(response),
+    )
+
+    with pytest.raises(ProviderAuthenticationError) as rejected:
+        adapter.transcribe(audio, "audio/mpeg")
+
+    message = str(rejected.value)
+    assert "rejected the session credential" in message
+    assert "secret-not-logged" not in message
+    assert "private@example.com" not in message
+    assert "metadata" not in message
+
+
+def test_provider_rate_limit_and_ambiguous_timeout_are_typed(
+    tmp_path: Path, fake_pcm_normalizer: list[str]
+) -> None:
     audio = tmp_path / "call.mp3"
     audio.write_bytes(b"ID3")
     limited = GeminiAdapter(
@@ -71,7 +220,9 @@ def test_inline_audio_limit_rejects_before_provider_request(tmp_path: Path) -> N
         adapter.transcribe(audio, "audio/mpeg")
 
 
-def test_provider_response_size_is_bounded(tmp_path: Path) -> None:
+def test_provider_response_size_is_bounded(
+    tmp_path: Path, fake_pcm_normalizer: list[str]
+) -> None:
     audio = tmp_path / "call.mp3"
     audio.write_bytes(b"ID3")
     adapter = GeminiAdapter(

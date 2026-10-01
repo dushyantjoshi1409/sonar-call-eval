@@ -17,6 +17,7 @@ import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from voice_eval.domain import JudgeResult, ScenarioProfile, Segment, TranscriptionResult
+from voice_eval.media import MediaError, normalized_provider_wave
 
 ProviderName = Literal["gemini", "openai", "groq", "custom"]
 JUDGE_PROMPT_VERSION = "voice-eval-judge-v1"
@@ -53,6 +54,16 @@ class ProviderRateLimited(ProviderError):
     def __init__(self, retry_after: str | None, provider: str = "Provider") -> None:
         super().__init__(f"{provider} rate limit was reached")
         self.retry_after = retry_after
+
+
+class ProviderInvalidRequest(ProviderError):
+    """The selected provider rejected submitted content or model settings."""
+
+    code = "invalid_provider_request"
+
+    def __init__(self, message: str, category: str = "invalid_request") -> None:
+        super().__init__(message)
+        self.category = category
 
 
 class ProviderAmbiguousSubmit(ProviderError):
@@ -344,12 +355,14 @@ class GeminiAdapter:
     """Bounded Gemini transcription and semantic judging adapter."""
 
     max_response_bytes = 5 * 1024 * 1024
+    max_audio_bytes = 14 * 1024 * 1024
 
     def __init__(
         self,
         api_key: str | ProviderConfig,
         model: str | None = None,
         transport: Transport | None = None,
+        ffmpeg_path: str = "ffmpeg",
     ) -> None:
         if isinstance(api_key, ProviderConfig):
             self.config = api_key
@@ -367,6 +380,7 @@ class GeminiAdapter:
             raise ValueError("model is outside the reviewed Gemini allowlist")
         self.api_key = self.config.api_key
         self.model = selected_model
+        self.ffmpeg_path = ffmpeg_path
         self._owns_transport = transport is None
         self.transport = transport or httpx.Client(follow_redirects=False, trust_env=False)
 
@@ -387,11 +401,18 @@ class GeminiAdapter:
 
     def transcribe(self, audio_path: Path, mime_type: str) -> TranscriptionResult:
         try:
-            if audio_path.stat().st_size > 70 * 1024 * 1024:
+            if audio_path.stat().st_size > self.max_audio_bytes:
                 raise ProviderError(
                     "Audio is too large for the bounded inline Gemini request; import a transcript"
                 )
-            encoded_audio = base64.b64encode(audio_path.read_bytes()).decode("ascii")
+            with normalized_provider_wave(audio_path, self.ffmpeg_path) as normalized_audio:
+                if normalized_audio.stat().st_size > self.max_audio_bytes:
+                    raise ProviderError(
+                        "Normalized audio is too large for Gemini inline input; import a transcript"
+                    )
+                encoded_audio = base64.b64encode(normalized_audio.read_bytes()).decode("ascii")
+        except MediaError as error:
+            raise ProviderError(str(error)) from error
         except OSError as error:
             raise ProviderError("Audio could not be read for the Gemini request") from error
         body = {
@@ -411,7 +432,7 @@ class GeminiAdapter:
                 {
                     "role": "user",
                     "parts": [
-                        {"inlineData": {"mimeType": mime_type, "data": encoded_audio}},
+                        {"inlineData": {"mimeType": "audio/wav", "data": encoded_audio}},
                         {
                             "text": (
                                 "Return a speaker-labelled transcript in the schema. Use "
@@ -617,6 +638,49 @@ class OpenAICompatibleAdapter:
             ) from error
 
 
+_AUTHENTICATION_ERROR_REASONS = frozenset(
+    {
+        "API_KEY_EXPIRED",
+        "API_KEY_HTTP_REFERRER_BLOCKED",
+        "API_KEY_INVALID",
+        "API_KEY_IP_ADDRESS_BLOCKED",
+        "API_KEY_SERVICE_BLOCKED",
+    }
+)
+_SAFE_STATUS_CATEGORIES = {
+    "FAILED_PRECONDITION": "failed_precondition",
+    "INVALID_ARGUMENT": "invalid_request",
+    "NOT_FOUND": "model_unavailable",
+    "PERMISSION_DENIED": "authentication",
+    "UNAUTHENTICATED": "authentication",
+}
+
+
+def _safe_upstream_category(response: httpx.Response) -> str | None:
+    """Classify only reviewed structured codes, never arbitrary upstream text."""
+    try:
+        if len(response.content) > 64 * 1024:
+            return None
+        payload = response.json()
+    except (RuntimeError, ValueError):
+        return None
+    if not isinstance(payload, dict) or not isinstance(payload.get("error"), dict):
+        return None
+    error = payload["error"]
+    details = error.get("details")
+    if isinstance(details, list):
+        for detail in details:
+            if not isinstance(detail, dict):
+                continue
+            reason = detail.get("reason")
+            if isinstance(reason, str) and reason in _AUTHENTICATION_ERROR_REASONS:
+                return "authentication"
+    status = error.get("status")
+    if isinstance(status, str):
+        return _SAFE_STATUS_CATEGORIES.get(status)
+    return None
+
+
 def _safe_post(transport: Any, url: str, *, provider: str, **kwargs: Any) -> httpx.Response:
     """Submit once and translate failures without exposing body or credentials."""
     try:
@@ -633,6 +697,27 @@ def _safe_post(transport: Any, url: str, *, provider: str, **kwargs: Any) -> htt
         raise ProviderRateLimited(response.headers.get("Retry-After"), provider)
     if 300 <= response.status_code < 400:
         raise ProviderError(f"{provider} redirect was rejected to protect credentials")
+    if response.status_code in {400, 422}:
+        category = _safe_upstream_category(response)
+        if category == "authentication":
+            raise ProviderAuthenticationError(f"{provider} rejected the session credential")
+        if category == "failed_precondition":
+            raise ProviderInvalidRequest(
+                f"{provider} reported an unmet account or project precondition; review the "
+                "selected provider setup",
+                category,
+            )
+        if category == "model_unavailable":
+            raise ProviderInvalidRequest(
+                f"{provider} reported that the selected model is unavailable; choose a "
+                "supported model or import a reviewed transcript",
+                category,
+            )
+        raise ProviderInvalidRequest(
+            f"{provider} rejected the submitted content or model settings; choose a supported "
+            "model or import a reviewed transcript",
+            category or "invalid_request",
+        )
     if response.status_code >= 400:
         raise ProviderError(f"{provider} returned HTTP {response.status_code}")
     return response
@@ -647,9 +732,11 @@ def _enforce_response_size(response: httpx.Response, limit: int, provider: str) 
 
 
 def create_provider_adapter(
-    config: ProviderConfig, transport: Transport | None = None
+    config: ProviderConfig,
+    transport: Transport | None = None,
+    ffmpeg_path: str = "ffmpeg",
 ) -> ProviderAdapter:
     """Create a provider-neutral adapter from a validated captured configuration."""
     if config.provider == "gemini":
-        return GeminiAdapter(config, transport=transport)
+        return GeminiAdapter(config, transport=transport, ffmpeg_path=ffmpeg_path)
     return OpenAICompatibleAdapter(config, transport)
