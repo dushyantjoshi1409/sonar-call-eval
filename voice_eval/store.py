@@ -1,4 +1,4 @@
-"""SQLite persistence for jobs, transcript revisions, runs, and queue state."""
+"""SQLite persistence for jobs, evaluations, regression runs, and queue state."""
 
 from __future__ import annotations
 
@@ -81,6 +81,19 @@ class Store:
                     created_at TEXT NOT NULL,
                     PRIMARY KEY(job_id, version)
                 );
+                CREATE TABLE IF NOT EXISTS regression_runs (
+                    id TEXT PRIMARY KEY,
+                    suite_version TEXT NOT NULL,
+                    provider TEXT NOT NULL,
+                    model TEXT,
+                    prompt_version TEXT NOT NULL,
+                    rubric_version TEXT NOT NULL,
+                    baseline_id TEXT,
+                    results_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS regression_runs_created_idx
+                ON regression_runs(created_at DESC);
                 """
             )
             columns = {
@@ -238,6 +251,49 @@ class Store:
             ).fetchone()
         return int(row["count"])
 
+    def save_regression_run(self, run: dict[str, Any]) -> dict[str, Any]:
+        """Persist nonsecret suite results and immutable comparison metadata."""
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT INTO regression_runs "
+                "(id, suite_version, provider, model, prompt_version, rubric_version, "
+                "baseline_id, results_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    run["id"],
+                    run["suite_version"],
+                    run["provider"],
+                    run["model"],
+                    run["prompt_version"],
+                    run["rubric_version"],
+                    run["baseline_id"],
+                    json.dumps(run, ensure_ascii=False),
+                    run["created_at"],
+                ),
+            )
+        return self.get_regression_run(str(run["id"]))
+
+    def get_regression_run(self, run_id: str) -> dict[str, Any]:
+        """Return one complete synthetic regression result."""
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT results_json FROM regression_runs WHERE id = ?", (run_id,)
+            ).fetchone()
+        if row is None:
+            raise KeyError(run_id)
+        value = json.loads(str(row["results_json"]))
+        if not isinstance(value, dict):
+            raise ValueError("stored regression run is not an object")
+        return value
+
+    def list_regression_runs(self, limit: int = 20) -> list[dict[str, Any]]:
+        """Return recent complete synthetic runs for baseline selection."""
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT results_json FROM regression_runs ORDER BY created_at DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return [json.loads(str(row["results_json"])) for row in rows]
+
     def claim_next(self) -> dict[str, Any] | None:
         """Atomically claim the oldest queued job for the single worker."""
         with self._connect() as connection:
@@ -344,6 +400,8 @@ def job_values(
     trusted_reference: str | None = None,
     reference_attested: bool = False,
     fixture: bool = False,
+    provider_model: str | None = None,
+    provider_handle: str | None = None,
 ) -> dict[str, Any]:
     """Assemble the internal database record for a newly validated job."""
     now = _now()
@@ -365,8 +423,8 @@ def job_values(
         "report_json": None,
         "run_version": 0,
         "fixture": int(fixture),
-        "provider_model": None,
-        "provider_handle": None,
+        "provider_model": provider_model,
+        "provider_handle": provider_handle,
         "created_at": now,
         "updated_at": now,
         "deleted_at": None,

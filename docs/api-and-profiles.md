@@ -4,6 +4,9 @@
 
 | Method | Path | Purpose |
 |---|---|---|
+| `GET` | `/api/provider-session` | Read nonsecret session provider metadata |
+| `POST` | `/api/provider-session` | Store one provider key in expiring server memory |
+| `DELETE` | `/api/provider-session` | Clear future access to the current session credential |
 | `POST` | `/api/jobs` | Upload media plus profile and optional reviewed transcript |
 | `GET` | `/api/jobs/{id}` | Read persisted status, transcript, and report |
 | `GET` | `/api/jobs/{id}/audio` | Stream the locally stored source recording |
@@ -12,8 +15,16 @@
 | `GET` | `/api/jobs/{id}/export` | Download the complete JSON export |
 | `DELETE` | `/api/jobs/{id}` | Tombstone the job and remove local media/text/results |
 | `POST` | `/api/metrics/wer` | Observe WER/CER only from an explicitly trusted reference |
+| `GET` | `/api/regression-runs` | List recent synthetic fixed-suite results |
+| `POST` | `/api/regression-runs` | Run the fixed suite with an optional compatible baseline |
 
 `POST /api/jobs` is multipart form data with `audio`, `profile_json`, optional `transcript_json`, optional `trusted_reference`, and `reference_attested`. Supply `Idempotency-Key`; the same key and payload returns the existing job, while changed inputs return HTTP 409. A reference affects WER only when the reviewer attests that it matches the same audio.
+
+`POST /api/provider-session` accepts `provider`, `api_key`, `judge_model`, optional `transcription_model` and `base_url`, plus `free_tier_attested` and `allow_paid_use`. The response never contains the key or credential handle. The cookie selects one isolated in-memory credential; jobs capture an internal opaque handle so later session changes cannot switch an in-flight job to another key. Clear, expiry, or restart makes future use fail with a reconnect instruction. An already submitted synchronous request may still finish.
+
+Custom base URLs must use HTTPS, contain no userinfo/query/fragment, and resolve only to public IP addresses. Custom is chat-only. Gemini, OpenAI, and Groq have distinct reviewed audio payloads rather than one assumed compatibility contract.
+
+Regression results distinguish the call `actual` verdict from the expectation `outcome`: `met`, `mismatched`, `unresolved`, or `error`. Baseline `comparison` is `improved`, `newly_failing`, `unchanged`, or `unresolved`. Suite, prompt, and rubric versions must match. No aggregate is produced.
 
 ## Profile schema 1.0
 

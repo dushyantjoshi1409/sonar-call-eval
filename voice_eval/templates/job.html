@@ -32,7 +32,9 @@
               {% for role in ['agent','customer','other','unknown'] %}<option value="{{ role }}" {% if segment.speaker == role %}selected{% endif %}>{{ role }}</option>{% endfor %}
             </select>
             <button class="time-link" type="button">{% if segment.start is not none %}{{ '%.1f' | format(segment.start) }}s{% else %}no time{% endif %}</button>
-            <span>{{ segment.precision | replace('_',' ') }}</span>
+            <label class="time-edit">Start<input class="start-time" aria-label="Start time for {{ segment.id }}" type="number" min="0" step="0.01" value="{{ segment.start if segment.start is not none else '' }}"></label>
+            <label class="time-edit">End<input class="end-time" aria-label="End time for {{ segment.id }}" type="number" min="0" step="0.01" value="{{ segment.end if segment.end is not none else '' }}"></label>
+            <span>{{ segment.precision | replace('_',' ') }} · saving marks reviewed</span>
           </div>
           <textarea rows="2" aria-label="Transcript text for {{ segment.id }}">{{ segment.text }}</textarea>
         </article>
@@ -116,8 +118,10 @@ document.querySelectorAll('.evidence-link').forEach(button => button.addEventLis
 function showError(message) { const toast = document.getElementById('page-error'); toast.textContent = message; toast.hidden = false; }
 document.getElementById('save-transcript')?.addEventListener('click', async () => {
   const segments = [...document.querySelectorAll('.transcript-turn')].map(turn => {
-    const start = turn.dataset.start === '' ? null : Number(turn.dataset.start);
-    const end = turn.dataset.end === '' ? null : Number(turn.dataset.end);
+    const startValue = turn.querySelector('.start-time').value;
+    const endValue = turn.querySelector('.end-time').value;
+    const start = startValue === '' ? null : Number(startValue);
+    const end = endValue === '' ? null : Number(endValue);
     return {id:turn.dataset.id, speaker:turn.querySelector('select').value, start, end, text:turn.querySelector('textarea').value, precision:'manual'};
   });
   const response = await fetch(`/api/jobs/${jobId}/transcript`, {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(segments)});

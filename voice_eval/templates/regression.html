@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block title %}Synthetic regression checks | Persistence{% endblock %}
+{% block content %}
+<a class="back" href="/">← Evaluation workspace</a>
+<section class="report-head">
+  <div>
+    <p class="eyebrow">Fixed suite · version 1</p>
+    <h1>Synthetic regression checks</h1>
+    <p>Authored test transcripts for comparing evaluator provider, model, prompt, and rubric behavior. This is not measured live-agent accuracy, and unchanged transcripts cannot measure voice-agent changes.</p>
+  </div>
+  <div class="status-card"><span class="status-dot status-review_ready"></span><div><strong>User initiated</strong><p>Six fixed cases, one selected judge, no optimizer or autonomous loop.</p></div></div>
+</section>
+<section class="panel regression-controls">
+  <div><p class="eyebrow">Run and compare</p><h2>Every metric remains independent</h2><p class="muted">A deliberately bad call judged FAIL can meet its regression expectation. UNKNOWN and provider errors are unresolved, never passing. No weighted aggregate is produced. Measuring a voice-agent prompt change requires new recordings or regenerated conversations, which this suite does not create.</p></div>
+  <label>Compatible baseline<select id="baseline-select"><option value="">No baseline</option>{% for run in runs %}<option value="{{ run.id }}">{{ run.created_at }} · {{ run.provider }} · {{ run.model or 'offline' }}</option>{% endfor %}</select></label>
+  <button id="run-suite" class="primary" type="button">Run six cases</button>
+  <div id="regression-error" class="error" hidden></div>
+</section>
+<section class="regression-grid" aria-label="Synthetic authored cases">
+{% for case in cases %}
+  <article class="panel regression-case">
+    <div class="finding-head"><span class="synthetic-pill">Synthetic</span><span class="metric-id">{{ case.category }}</span></div>
+    <h2>{{ case.name }}</h2><p>{{ case.purpose }}</p>
+    <div class="expectation-list">{% for metric, expectation in case.expectations.items() %}<div><span class="verdict verdict-{{ expectation.verdict | lower }}">Expected {{ expectation.verdict }}</span><p><b>{{ metric | replace('_',' ') }}</b><small>{{ expectation.note }}</small></p></div>{% endfor %}</div>
+  </article>
+{% endfor %}
+</section>
+<section id="latest-run" class="results-section" {% if not runs %}hidden{% endif %}>
+  <div class="section-title"><div><p class="eyebrow">Latest persisted run</p><h2 id="run-title">{% if runs %}{{ runs[0].provider }} · {{ runs[0].model or 'offline' }}{% endif %}</h2></div></div>
+  <div id="run-results" class="stack"></div>
+</section>
+{% endblock %}
+{% block scripts %}
+<script>
+const initialRuns = {{ runs | tojson }};
+const resultRoot = document.getElementById('run-results');
+function renderRun(run) {
+  document.getElementById('latest-run').hidden = false;
+  document.getElementById('run-title').textContent = `${run.provider} · ${run.model || 'offline'} · ${run.created_at}`;
+  resultRoot.replaceChildren(...run.cases.map(testCase => {
+    const article = document.createElement('article'); article.className = 'panel regression-result';
+    const heading = document.createElement('h3'); heading.textContent = testCase.name; article.append(heading);
+    testCase.checks.forEach(check => {
+      const row = document.createElement('div'); row.className = 'regression-check';
+      const badge = document.createElement('span'); badge.className = `outcome outcome-${check.outcome}`; badge.textContent = check.outcome;
+      const copy = document.createElement('p'); const title = document.createElement('b'); title.textContent = `${check.metric_id.replaceAll('_',' ')} · expected ${check.expected}, actual ${check.actual}`;
+      const detail = document.createElement('small'); detail.textContent = `${check.comparison} · ${check.error || check.rationale}`;
+      copy.append(title, detail); row.append(badge, copy); article.append(row);
+    }); return article;
+  }));
+}
+if (initialRuns.length) renderRun(initialRuns[0]);
+document.getElementById('run-suite').addEventListener('click', async event => {
+  const button = event.currentTarget; const error = document.getElementById('regression-error'); error.hidden = true; button.disabled = true; button.textContent = 'Running bounded suite…';
+  const baseline = document.getElementById('baseline-select').value;
+  try { const response = await fetch('/api/regression-runs', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({baseline_id:baseline || null})}); const body = await response.json(); if (!response.ok) throw new Error(body.detail || 'Suite run failed'); renderRun(body); }
+  catch (reason) { error.textContent = reason.message; error.hidden = false; }
+  finally { button.disabled = false; button.textContent = 'Run six cases'; }
+});
+</script>
+{% endblock %}

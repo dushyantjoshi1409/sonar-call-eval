@@ -158,7 +158,9 @@ def test_real_audio_without_transcript_or_key_needs_transcript(
     )
     assert response.status_code == 201
     assert response.json()["status"] == "needs_transcript"
-    assert response.json()["status_detail"] == "GEMINI_API_KEY is not configured"
+    assert response.json()["status_detail"] == (
+        "Connect an audio-capable provider or import a transcript"
+    )
 
 
 def test_demo_storage_failure_removes_generated_media(
@@ -351,9 +353,7 @@ def test_long_call_samples_evidence_but_counts_every_matching_turn(
     assert {item["name"]: item["value"] for item in repetition["measurements"]}[
         "exact_repeated_turns"
     ] == 25
-    length_measurements = {
-        item["name"]: item["value"] for item in response_length["measurements"]
-    }
+    length_measurements = {item["name"]: item["value"] for item in response_length["measurements"]}
     assert length_measurements["agent_turns_checked"] == 25
     assert length_measurements["turns_exceeding_limits"] == 25
     assert "sample" in repetition["rationale"].lower()

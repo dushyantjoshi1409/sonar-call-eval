@@ -12,6 +12,23 @@
   </div>
 </section>
 
+<section class="panel provider-card" aria-labelledby="provider-heading">
+  <div class="provider-intro"><div><p class="eyebrow">Provider session</p><h2 id="provider-heading">Connect a compatible key for this browser session</h2><p>Choose Gemini, OpenAI, Groq, or a custom OpenAI-compatible chat endpoint. Saving configures the key in server memory only; it does not remotely verify the credential.</p></div><div id="provider-status" class="connection-state">Not connected</div></div>
+  <div class="provider-fields">
+    <label>Provider<select id="provider-select"><option value="gemini">Gemini</option><option value="openai">OpenAI</option><option value="groq">Groq</option><option value="custom">Custom OpenAI-compatible</option></select></label>
+    <label>API key<input id="provider-key" type="password" autocomplete="new-password" placeholder="Held in server memory until expiry or clear"></label>
+    <label>Judge model<input id="judge-model" type="text" value="gemini-3.5-flash-lite" autocomplete="off"></label>
+    <label id="transcription-model-label">Transcription model<input id="transcription-model" type="text" value="gemini-3.5-flash-lite" autocomplete="off"></label>
+    <label id="base-url-label" hidden>HTTPS base URL<input id="base-url" type="url" placeholder="https://api.example.com/v1" autocomplete="off"></label>
+  </div>
+  <div class="provider-policy">
+    <label id="free-tier-label" class="check-label"><input id="free-tier-attested" type="checkbox"> I verified this Gemini/Groq project is eligible for its free tier.</label>
+    <label class="check-label"><input id="paid-use" type="checkbox"> I explicitly allow possible paid API use for this session. OpenAI and custom services require this.</label>
+  </div>
+  <p id="provider-capability" class="helper">Gemini supports the existing audio transcription and semantic judge flow. Model output still requires transcript review.</p>
+  <div class="provider-actions"><button id="connect-provider" class="secondary" type="button">Save session key</button><button id="clear-provider" class="danger" type="button">Clear key</button><span id="provider-message" class="muted"></span></div>
+</section>
+
 <section class="workspace-grid">
   <form id="upload-form" class="panel stack" enctype="multipart/form-data">
     <div>
@@ -21,7 +38,7 @@
     <label class="dropzone" for="audio">
       <span class="upload-icon" aria-hidden="true">↑</span>
       <strong>Choose WAV, MP3, or M4A</strong>
-      <span>Up to 100 MiB and 20 minutes. Audio stays in local storage unless Gemini is explicitly enabled.</span>
+      <span>Up to 100 MiB and 20 minutes. Audio stays local unless the selected provider is explicitly used.</span>
       <input id="audio" name="audio" type="file" accept="audio/wav,audio/mpeg,audio/mp4,.wav,.mp3,.m4a" required>
     </label>
     <div class="field-row">
@@ -34,7 +51,7 @@
       <label>Transcript source
         <select id="transcript-mode">
           <option value="manual">Import reviewed JSON</option>
-          <option value="provider">Use Gemini if configured</option>
+          <option value="provider">Use connected provider if audio-capable</option>
         </select>
       </label>
     </div>
@@ -58,8 +75,7 @@
         <p class="helper">Without this attestation, lexical error rates remain UNKNOWN. Script and negation are preserved.</p>
     </details>
     <div id="provider-note" class="notice" hidden>
-      {% if gemini_ready %}<strong>Gemini is ready.</strong> Model timestamps and speaker boundaries will still require review.
-      {% else %}<strong>Gemini is not enabled.</strong> Add the key and confirm the project is free-tier eligible, or import a reviewed transcript.{% endif %}
+      <strong>Provider transcription selected.</strong> The selected session must support audio. Chat-only endpoints require a reviewed transcript import. Whisper-style output keeps speaker roles unknown until you correct them on the review page.
     </div>
     <div id="form-error" class="error" role="alert" hidden></div>
     <button class="primary" type="submit">Create evaluation</button>
@@ -86,6 +102,8 @@
 {% block scripts %}
 <script>
 const presets = {{ presets | tojson }};
+const initialProviderSession = {{ provider_session | tojson }};
+const environmentProvider = {{ environment_provider | tojson }};
 const select = document.getElementById('profile-select');
 const editor = document.getElementById('profile-json');
 const transcriptMode = document.getElementById('transcript-mode');
@@ -101,6 +119,44 @@ function setTranscriptMode() {
   document.getElementById('transcript-json').value = provider ? '' : document.getElementById('transcript-json').value;
 }
 setProfile(); select.addEventListener('change', setProfile); transcriptMode.addEventListener('change', setTranscriptMode);
+const providerDefaults = {
+  gemini:{judge:'gemini-3.5-flash-lite', transcription:'gemini-3.5-flash-lite', capability:'Gemini supports audio transcription and schema-constrained judging. Model roles and timing require review.'},
+  openai:{judge:'gpt-4o-mini', transcription:'whisper-1', capability:'OpenAI supports chat judging and multipart transcription up to 25 MiB. Cost is unknown and requires explicit opt-in.'},
+  groq:{judge:'openai/gpt-oss-20b', transcription:'whisper-large-v3-turbo', capability:'Groq supports OpenAI-compatible judging and multipart transcription up to 25 MiB. Confirm free-tier eligibility or opt in to paid use.'},
+  custom:{judge:'compatible-model', transcription:'', capability:'Custom endpoints are chat-only. Import and review a transcript before evaluation. Public HTTPS destinations only.'}
+};
+const providerSelect = document.getElementById('provider-select');
+function setProviderFields() {
+  const selected = providerDefaults[providerSelect.value];
+  document.getElementById('judge-model').value = selected.judge;
+  document.getElementById('transcription-model').value = selected.transcription;
+  document.getElementById('transcription-model-label').hidden = providerSelect.value === 'custom';
+  document.getElementById('base-url-label').hidden = providerSelect.value !== 'custom';
+  document.getElementById('free-tier-label').hidden = !['gemini','groq'].includes(providerSelect.value);
+  document.getElementById('provider-capability').textContent = selected.capability;
+}
+function renderProviderStatus(metadata) {
+  const status = document.getElementById('provider-status');
+  if (metadata.connected) { status.textContent = `Configured · ${metadata.provider} · ${metadata.judge_model} · not remotely verified`; status.className = 'connection-state connected'; }
+  else if (environmentProvider) { status.textContent = `Environment fallback · ${environmentProvider.provider} · configured, not remotely verified`; status.className = 'connection-state connected'; }
+  else { status.textContent = 'Not connected · offline checks remain available'; status.className = 'connection-state'; }
+}
+providerSelect.addEventListener('change', setProviderFields); setProviderFields(); renderProviderStatus(initialProviderSession);
+document.getElementById('connect-provider').addEventListener('click', async () => {
+  const message = document.getElementById('provider-message'); message.textContent = 'Saving…';
+  const provider = providerSelect.value;
+  const body = {provider, api_key:document.getElementById('provider-key').value, judge_model:document.getElementById('judge-model').value, transcription_model:provider === 'custom' ? null : document.getElementById('transcription-model').value, base_url:provider === 'custom' ? document.getElementById('base-url').value : null, free_tier_attested:document.getElementById('free-tier-attested').checked, allow_paid_use:document.getElementById('paid-use').checked};
+  try {
+    const response = await fetch('/api/provider-session', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)}); const result = await response.json();
+    if (!response.ok) { message.textContent = result.detail || 'Could not save provider session'; return; }
+    message.textContent = 'Configured in server memory. No remote validation was performed.'; renderProviderStatus(result);
+  } catch (_) { message.textContent = 'Could not reach the local server. The key was not saved.'; }
+  finally { document.getElementById('provider-key').value = ''; }
+});
+document.getElementById('clear-provider').addEventListener('click', async () => {
+  const response = await fetch('/api/provider-session', {method:'DELETE'}); const result = await response.json();
+  document.getElementById('provider-key').value = ''; document.getElementById('provider-message').textContent = result.detail; renderProviderStatus(result);
+});
 async function submitAndOpen(endpoint, options) {
   const error = document.getElementById('form-error'); error.hidden = true;
   const response = await fetch(endpoint, options); const body = await response.json();

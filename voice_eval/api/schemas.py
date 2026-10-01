@@ -63,7 +63,7 @@ class PublicJob(BaseModel):
     run_version: int
     fixture: bool
     provider_model: str | None
-    provider_handle: str | None
+    provider_handle: str | None = None
     created_at: datetime
     updated_at: datetime
     deleted_at: datetime | None
@@ -74,7 +74,7 @@ class PublicJob(BaseModel):
         public = {
             key: value
             for key, value in record.items()
-            if key not in {"media_path", "payload_hash"}
+            if key not in {"media_path", "payload_hash", "provider_handle"}
         }
         return cls.model_validate(public)
 

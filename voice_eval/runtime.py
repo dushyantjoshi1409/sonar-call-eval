@@ -5,6 +5,8 @@ from pathlib import Path
 
 from voice_eval.config import Settings
 from voice_eval.media import MediaValidator
+from voice_eval.provider_sessions import ProviderSessionVault
+from voice_eval.regression import RegressionService
 from voice_eval.services import JobService
 from voice_eval.store import Store
 from voice_eval.worker import Worker
@@ -18,6 +20,8 @@ class Runtime:
     store: Store
     jobs: JobService
     worker: Worker
+    sessions: ProviderSessionVault
+    regressions: RegressionService
     media_root: Path
     temp_root: Path
 
@@ -33,12 +37,14 @@ def build_runtime(settings: Settings) -> Runtime:
     media_root.chmod(0o700)
     temp_root.chmod(0o700)
     store = Store(settings.database_path or settings.data_dir / "voice_eval.sqlite3")
+    sessions = ProviderSessionVault(settings.provider_session_ttl_seconds)
     validator = MediaValidator(
         ffprobe_path=settings.ffprobe_path,
         ffmpeg_path=settings.ffmpeg_path,
         max_bytes=settings.max_upload_bytes,
         max_duration_seconds=settings.max_duration_seconds,
     )
-    worker = Worker(store, settings)
-    jobs = JobService(settings, store, validator, media_root, temp_root)
-    return Runtime(settings, store, jobs, worker, media_root, temp_root)
+    worker = Worker(store, settings, sessions)
+    jobs = JobService(settings, store, validator, media_root, temp_root, sessions)
+    regressions = RegressionService(settings, store, sessions)
+    return Runtime(settings, store, jobs, worker, sessions, regressions, media_root, temp_root)

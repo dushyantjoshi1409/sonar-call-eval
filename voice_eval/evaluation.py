@@ -111,7 +111,7 @@ def validate_finding_evidence(finding: Finding, segments: list[Segment]) -> None
     for evidence in finding.evidence:
         segment = by_id.get(evidence.segment_id)
         if segment is None:
-            raise ValueError(f"unknown evidence segment {evidence.segment_id}")
+            raise ValueError("judge evidence referenced an unknown transcript segment")
         if evidence.end_char > len(segment.text):
             raise ValueError("evidence offsets exceed source segment")
         if segment.text[evidence.start_char : evidence.end_char] != evidence.quote:

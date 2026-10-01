@@ -27,7 +27,12 @@ from voice_eval.evaluation import (
 )
 from voice_eval.media import MediaError, MediaValidator
 from voice_eval.profiles import get_preset, profile_hash, validate_profile
-from voice_eval.providers import GeminiAdapter, ProviderError
+from voice_eval.provider_sessions import (
+    ENVIRONMENT_PROVIDER_HANDLE,
+    ProviderSessionVault,
+    environment_provider_config,
+)
+from voice_eval.providers import ProviderConfig, ProviderError, create_provider_adapter
 from voice_eval.store import Store, job_values
 
 logger = logging.getLogger(__name__)
@@ -99,6 +104,7 @@ class CreateJobCommand:
     trusted_reference: str | None = None
     reference_attested: bool = False
     idempotency_key: str | None = None
+    provider_handle: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -171,12 +177,14 @@ class JobService:
         validator: MediaValidator,
         media_root: Path,
         temp_root: Path,
+        sessions: ProviderSessionVault,
     ) -> None:
         self.settings = settings
         self.store = store
         self.validator = validator
         self.media_root = media_root
         self.temp_root = temp_root
+        self.sessions = sessions
 
     async def create_job(self, command: CreateJobCommand) -> CreateJobResult:
         """Validate and persist an upload, cleaning staged media on any failure."""
@@ -194,19 +202,24 @@ class JobService:
         final_path: Path | None = None
         committed = False
         try:
-            media_hash = await save_upload(
-                command.audio, temporary, self.settings.max_upload_bytes
-            )
+            media_hash = await save_upload(command.audio, temporary, self.settings.max_upload_bytes)
             profile_digest = profile_hash(profile)
             transcript_canonical = json.dumps(
                 [item.model_dump(mode="json") for item in segments] if segments else None,
                 sort_keys=True,
                 ensure_ascii=False,
             )
+            selected_handle, selected_config = self._captured_provider(command.provider_handle)
+            provider_identity = (
+                f"{selected_config.provider}:{selected_config.judge_model}"
+                if selected_config
+                else "offline"
+            )
             payload_hash = hashlib.sha256(
                 (
                     f"{media_hash}:{profile_digest}:{transcript_canonical}:"
-                    f"{command.trusted_reference or ''}:{command.reference_attested}"
+                    f"{command.trusted_reference or ''}:{command.reference_attested}:"
+                    f"{provider_identity}:{selected_handle or ''}"
                 ).encode()
             ).hexdigest()
             if command.idempotency_key:
@@ -227,7 +240,7 @@ class JobService:
             final_dir.mkdir(mode=0o700)
             final_path = final_dir / f"original{suffix}"
             shutil.move(str(temporary), final_path)
-            status, detail = self._initial_status(bool(segments))
+            status, detail = self._initial_status(bool(segments), selected_config)
             values = job_values(
                 job_id=job_id,
                 idempotency_key=command.idempotency_key,
@@ -246,6 +259,8 @@ class JobService:
                     command.trusted_reference.strip() if command.trusted_reference else None
                 ),
                 reference_attested=command.reference_attested,
+                provider_model=selected_config.judge_model if selected_config else None,
+                provider_handle=selected_handle,
             )
             try:
                 job = self.store.create_job(values)
@@ -352,9 +367,7 @@ class JobService:
             validate_transcript_segments(segments, float(job["media"]["duration_seconds"]))
             return self.store.save_transcript(
                 job_id,
-                json.dumps(
-                    [item.model_dump(mode="json") for item in segments], ensure_ascii=False
-                ),
+                json.dumps([item.model_dump(mode="json") for item in segments], ensure_ascii=False),
             )
         except ValueError as error:
             raise InvalidJobInput(f"Invalid transcript: {error}") from error
@@ -378,11 +391,10 @@ class JobService:
             trusted_reference=job["trusted_reference_text"],
             reference_attested=bool(job["reference_attested"]),
         )
-        if self.settings.gemini_api_key and self.settings.gemini_free_tier_confirmed:
+        provider = self._provider_for_job(job)
+        if provider is not None:
             try:
-                with GeminiAdapter(
-                    self.settings.gemini_api_key, self.settings.gemini_model
-                ) as adapter:
+                with create_provider_adapter(provider) as adapter:
                     judged = adapter.judge(segments, profile)
                 deterministic_length = next(
                     item for item in report.findings if item.metric_id == "response_length"
@@ -390,7 +402,9 @@ class JobService:
                 for finding in judged.findings:
                     validate_finding_evidence(finding, segments)
                 report.findings = [*judged.findings, deterministic_length]
-                report.evaluator = f"gemini-schema+deterministic-v1:{self.settings.gemini_model}"
+                report.evaluator = (
+                    f"{provider.provider}-schema+deterministic-v1:{provider.judge_model}"
+                )
             except (ProviderError, ValidationError, ValueError) as error:
                 try:
                     self.store.update(
@@ -417,7 +431,7 @@ class JobService:
             "report": job["report"],
             "history": self.store.get_history(job_id),
             "external_provider_deletion": (
-                "Gemini inline requests are not managed by local deletion; "
+                "External provider requests are not managed by local deletion; "
                 "consult the provider data policy."
                 if job["provider_model"]
                 else "No external provider was used for this run."
@@ -437,29 +451,66 @@ class JobService:
         )
         return result
 
-    def _initial_status(self, has_segments: bool) -> tuple[str, str]:
+    def _initial_status(
+        self, has_segments: bool, provider: ProviderConfig | None
+    ) -> tuple[str, str]:
         if has_segments:
             return (
                 "review_ready",
                 "Manual transcript imported; review roles and evidence before evaluation",
             )
-        if not self.settings.gemini_api_key:
-            return "needs_transcript", "GEMINI_API_KEY is not configured"
-        if not self.settings.gemini_free_tier_confirmed:
+        if provider is None:
+            if self.settings.gemini_api_key and not self.settings.gemini_free_tier_confirmed:
+                return (
+                    "needs_configuration",
+                    "Confirm Gemini free-tier eligibility or import a reviewed transcript",
+                )
+            return "needs_transcript", "Connect an audio-capable provider or import a transcript"
+        if not provider.supports_transcription:
             return (
-                "needs_configuration",
-                "Confirm GEMINI_FREE_TIER_CONFIRMED only after verifying the project billing tier",
+                "needs_transcript",
+                "Selected provider is chat-only; import a reviewed transcript",
             )
         if self.store.pending_count() >= self.settings.max_pending_jobs:
             raise QueueFull("Local processing queue is full; retry later")
         return "queued", "Waiting for the single local transcription worker"
 
+    def _captured_provider(
+        self, requested_handle: str | None
+    ) -> tuple[str | None, ProviderConfig | None]:
+        """Capture one provider selection without falling across credential boundaries."""
+        if requested_handle:
+            config = self.sessions.resolve_handle(requested_handle)
+            if config is None:
+                raise ProviderUnavailable(
+                    "Provider session expired or was cleared; reconnect before creating the job"
+                )
+            return requested_handle, config
+        environment = environment_provider_config(self.settings)
+        if environment is not None:
+            return ENVIRONMENT_PROVIDER_HANDLE, environment
+        return None, None
+
+    def _provider_for_job(self, job: dict[str, Any]) -> ProviderConfig | None:
+        """Resolve only the immutable handle captured when the job was created."""
+        handle = job["provider_handle"]
+        if handle == ENVIRONMENT_PROVIDER_HANDLE:
+            provider = environment_provider_config(self.settings)
+        elif handle:
+            provider = self.sessions.resolve_handle(str(handle))
+        else:
+            provider = environment_provider_config(self.settings)
+        if handle and provider is None:
+            raise ProviderUnavailable(
+                "Provider session expired, was cleared, or the server restarted; reconnect and "
+                "create a new evaluation. Existing in-flight calls may still finish."
+            )
+        return provider
+
     def _resolve_create_conflict(
         self, idempotency_key: str | None, payload_hash: str, error: sqlite3.IntegrityError
     ) -> dict[str, Any]:
-        existing = (
-            self.store.find_by_idempotency_key(idempotency_key) if idempotency_key else None
-        )
+        existing = self.store.find_by_idempotency_key(idempotency_key) if idempotency_key else None
         if existing is None:
             raise JobConflict("Concurrent job creation conflict") from error
         if existing["deleted_at"]:

@@ -11,7 +11,8 @@ A local FastAPI application for uploading a recorded call, reviewing its transcr
 - Explicit nullable Yes/No values, proposed 0-2 quality grades/classifications, and finite numeric measurements with provenance
 - Exact source segment and quote-offset validation, explicit coverage and unknowns, and no aggregate score
 - Synthetic demo that is visibly labelled and never substitutes for uploaded audio
-- Optional Gemini audio transcription and schema-constrained judging, restricted to reviewed free-tier model IDs
+- Session-scoped Gemini, OpenAI, Groq, and custom OpenAI-compatible judging, with reviewed audio contracts only where supported
+- Fixed synthetic regression suite with per-metric expectation outcomes and compatible baseline comparison
 - JSON export containing the profile snapshot/hash, transcript revision, findings, provenance, and limitations
 
 ## Local setup
@@ -29,17 +30,26 @@ uvicorn voice_eval.app:app --host 127.0.0.1 --port 8000
 
 Open <http://127.0.0.1:8000>. Fixture/demo mode and reviewed transcript imports require no credentials or network.
 
-## Free-only Gemini setup
+## Provider sessions
 
-Gemini is optional. The current reviewed default is `gemini-3.5-flash-lite`, whose official pricing page lists free-tier standard input/output and audio support. The application accepts up to 100 MiB for local/manual workflows but rejects Gemini inline audio over 70 MiB before any request, leaving room for base64 and prompt overhead under Google's 100 MB request guidance. Google documents model-dependent rate limits and says active limits must be checked in AI Studio.
+The upload page accepts a Gemini, OpenAI, Groq, or custom OpenAI-compatible key. The key is held only in process memory behind an opaque HttpOnly SameSite cookie, expires after one hour by default, and is removed by Clear or server restart. It is never written to SQLite, `.env`, exports, URLs, browser storage, or provider error messages. Saving a key means configured, not remotely verified.
 
-1. Put `GEMINI_API_KEY` in this project's `.env`. Never paste the key into chat or commit it.
-2. Confirm the key's project is actually eligible for the Gemini Developer API free tier in Google AI Studio.
-3. Only then set `GEMINI_FREE_TIER_CONFIRMED=true`.
+- Gemini preserves the existing inline-audio and schema-constrained judge flow. The reviewed inline limit is 70 MiB.
+- OpenAI uses Chat Completions structured output and multipart `/audio/transcriptions`; the reviewed default transcription contract is `whisper-1`, `verbose_json`, and a 25 MiB file limit.
+- Groq uses its OpenAI-compatible Chat Completions endpoint plus its documented multipart transcription endpoint; the default transcription model is `whisper-large-v3-turbo` with a 25 MiB free-tier file limit.
+- Custom endpoints must be public HTTPS OpenAI-compatible base URLs with no embedded auth, query, or fragment. They are deliberately chat-only, so audio requires a reviewed transcript import.
 
-The model allowlist and flag prevent accidental unsupported configuration, but cannot override Google account billing. There is no paid fallback. HTTP 429 and ambiguous timeouts are explicit failures, and ambiguous submissions are not retried automatically.
+Gemini and Groq require an explicit free-tier eligibility attestation. OpenAI and custom services have unknown cost and require a separate session-only paid-use opt-in, off by default. There is no implicit provider or paid fallback. HTTP 401/403, 429, redirects, timeouts, malformed output, and unsupported transcription remain distinct safe failures; ambiguous submissions are not retried.
 
-Official sources: [pricing](https://ai.google.dev/gemini-api/docs/pricing), [billing tiers](https://ai.google.dev/gemini-api/docs/billing), [audio input](https://ai.google.dev/gemini-api/docs/generate-content/audio), [structured output](https://ai.google.dev/gemini-api/docs/structured-output), [rate limits](https://ai.google.dev/gemini-api/docs/rate-limits).
+The `.env` Gemini settings remain as a backward-compatible fallback when no browser session is selected. A selected session never borrows the environment key.
+
+Official contracts: [Gemini audio](https://ai.google.dev/gemini-api/docs/audio), [Gemini structured output](https://ai.google.dev/gemini-api/docs/structured-output), [OpenAI file transcription](https://developers.openai.com/api/docs/guides/speech-to-text), [OpenAI structured output](https://developers.openai.com/api/docs/guides/structured-outputs), [Groq OpenAI compatibility](https://console.groq.com/docs/openai), [Groq speech to text](https://console.groq.com/docs/speech-to-text), and [Groq structured output](https://console.groq.com/docs/structured-outputs).
+
+## Synthetic regression checks
+
+`/regression` runs six fixed authored transcript cases across dental, delivery, negation, justified and unnecessary repetition, and flow. It evaluates the selected provider/model with the same prompt, schema, and evidence validator as uploaded calls, then compares whether each explicit expectation was met. A correctly judged FAIL on a deliberately bad transcript is a met expectation; UNKNOWN and errors remain unresolved. Results persist without credentials and can be compared only against the same suite, prompt, and rubric versions.
+
+This checks evaluator/provider/model behavior, not live voice-agent accuracy. Measuring a voice-agent prompt change requires new recordings or regenerated conversations, which is outside this feature. The fixed-suite and baseline idea was inspired by [AutoVoiceEvals](https://github.com/ArchishmanSengupta/autovoiceevals); this implementation is original and does not mutate agent prompts or call voice-platform APIs.
 
 ## Manual transcript format
 
@@ -58,7 +68,7 @@ Upload the real audio and paste an array of reviewed segments. `start` and `end`
 ]
 ```
 
-Model timestamps and speaker boundaries are always stored as `model_estimated` and require human review. A spoken booking or “saved feedback” claim is never proof of a backend action.
+Model timestamps and speaker boundaries are always stored as `model_estimated` and require human review. Whisper-style output uses `unknown` speakers until the reviewer corrects roles and boundaries. A spoken booking or “saved feedback” claim is never proof of a backend action.
 
 ## Development checks
 

@@ -17,6 +17,8 @@ from voice_eval.api.jobs import router as jobs_router
 from voice_eval.api.metrics import router as metrics_router
 from voice_eval.api.pages import router as pages_router
 from voice_eval.api.profiles import router as profiles_router
+from voice_eval.api.provider_sessions import router as provider_sessions_router
+from voice_eval.api.regression import router as regression_router
 from voice_eval.config import Settings
 from voice_eval.runtime import build_runtime
 
@@ -79,6 +81,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
     application.include_router(pages_router)
     application.include_router(profiles_router)
+    application.include_router(provider_sessions_router)
+    application.include_router(regression_router)
     application.include_router(jobs_router)
     application.include_router(metrics_router)
     return application

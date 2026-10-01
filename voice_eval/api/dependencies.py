@@ -4,6 +4,7 @@ from typing import Annotated
 
 from fastapi import Depends, Request
 
+from voice_eval.regression import RegressionService
 from voice_eval.runtime import Runtime
 from voice_eval.services import JobService
 
@@ -18,5 +19,13 @@ def get_job_service(runtime: Annotated[Runtime, Depends(get_runtime)]) -> JobSer
     return runtime.jobs
 
 
+def get_regression_service(
+    runtime: Annotated[Runtime, Depends(get_runtime)],
+) -> RegressionService:
+    """Expose fixed-suite orchestration without route access to storage internals."""
+    return runtime.regressions
+
+
 RuntimeDependency = Annotated[Runtime, Depends(get_runtime)]
 JobServiceDependency = Annotated[JobService, Depends(get_job_service)]
+RegressionServiceDependency = Annotated[RegressionService, Depends(get_regression_service)]

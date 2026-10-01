@@ -11,7 +11,12 @@ from typing import Any
 
 from voice_eval.config import Settings
 from voice_eval.evaluation import validate_transcript_segments
-from voice_eval.providers import GeminiAdapter, ProviderError
+from voice_eval.provider_sessions import (
+    ENVIRONMENT_PROVIDER_HANDLE,
+    ProviderSessionVault,
+    environment_provider_config,
+)
+from voice_eval.providers import ProviderError, create_provider_adapter
 from voice_eval.store import Store
 
 logger = logging.getLogger(__name__)
@@ -24,9 +29,10 @@ class Worker:
     process worker, logs the traceback, and exposes only an exception type to users.
     """
 
-    def __init__(self, store: Store, settings: Settings) -> None:
+    def __init__(self, store: Store, settings: Settings, sessions: ProviderSessionVault) -> None:
         self.store = store
         self.settings = settings
+        self.sessions = sessions
         self._stopping = asyncio.Event()
 
     async def run(self) -> None:
@@ -55,25 +61,32 @@ class Worker:
         self._stopping.set()
 
     def _transcribe(self, job: dict[str, Any]) -> None:
-        if not self.settings.gemini_api_key or not self.settings.gemini_free_tier_confirmed:
+        handle = job["provider_handle"]
+        if handle == ENVIRONMENT_PROVIDER_HANDLE or handle is None:
+            provider = environment_provider_config(self.settings)
+        else:
+            provider = self.sessions.resolve_handle(str(handle))
+        if provider is None:
             self.store.update(
                 str(job["id"]),
-                status="needs_transcript",
-                status_detail="Gemini free-tier configuration is incomplete",
+                status="failed" if handle else "needs_transcript",
+                status_detail=(
+                    "provider_session_unavailable: reconnect and create a new evaluation"
+                    if handle
+                    else "Connect an audio-capable provider or import a reviewed transcript"
+                ),
             )
             return
         suffix = Path(str(job["media_path"])).suffix.lower()
         mime = {".wav": "audio/wav", ".mp3": "audio/mpeg", ".m4a": "audio/mp4"}[suffix]
         try:
-            with GeminiAdapter(
-                self.settings.gemini_api_key, self.settings.gemini_model
-            ) as adapter:
+            with create_provider_adapter(provider) as adapter:
                 result = adapter.transcribe(Path(str(job["media_path"])), mime)
             duration = float(job["media"]["duration_seconds"])
             try:
                 validate_transcript_segments(result.segments, duration)
             except ValueError as error:
-                message = f"Gemini returned invalid transcript segments: {error}"
+                message = f"Provider returned invalid transcript segments: {error}"
                 raise ProviderError(message) from error
             with suppress(PermissionError):
                 transcript_json = json.dumps(
@@ -84,7 +97,7 @@ class Worker:
                 self.store.update(
                     str(job["id"]),
                     status_detail="Model-estimated transcript requires speaker and timing review",
-                    provider_model=self.settings.gemini_model,
+                    provider_model=provider.transcription_model,
                 )
         except ProviderError as error:
             with suppress(PermissionError):

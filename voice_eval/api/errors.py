@@ -4,6 +4,7 @@ import logging
 import sqlite3
 
 from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from voice_eval.services import (
@@ -45,3 +46,14 @@ def install_exception_handlers(app: FastAPI) -> None:
     async def handle_local_resource_error(_: Request, error: Exception) -> JSONResponse:
         logger.exception("Local storage operation failed", exc_info=error)
         return JSONResponse({"detail": "Local storage operation failed"}, status_code=503)
+
+    @app.exception_handler(RequestValidationError)
+    async def handle_validation_error(
+        request: Request, error: RequestValidationError
+    ) -> JSONResponse:
+        """Prevent raw credential values from appearing in validation responses."""
+        if request.url.path == "/api/provider-session":
+            return JSONResponse(
+                {"detail": "Invalid provider session configuration"}, status_code=422
+            )
+        return JSONResponse({"detail": error.errors()}, status_code=422)

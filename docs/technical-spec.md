@@ -1,8 +1,8 @@
 # Technical specification
 
-Version 1.1 | Codex | 2026-10-01 | Implemented local MVP contract
+Version 1.2 | Codex | 2026-10-01 | Implemented local provider-session contract
 
-> Implementation update: provider-specific Sarvam/OpenAI sections below are retained as research provenance but are superseded. The implementation uses one optional Gemini Developer API adapter for inline audio transcription and schema-constrained judging, plus a credential-free manual transcript path and labelled synthetic fixture. Scenario profiles remove restaurant assumptions from the evaluator.
+> Implementation update: typed adapters now support Gemini, OpenAI, Groq, and a chat-only custom OpenAI-compatible endpoint. Browser keys are isolated in expiring process-memory sessions. The manual transcript and labelled synthetic paths remain credential-free.
 
 Scope, assumptions and acceptance are owned by [requirements.md](requirements.md); metric semantics by [eval-rubric.md](eval-rubric.md). This is a new local application and introduces no breaking changes to existing APIs or consumers. The implemented package, SQLite initialization, and local HTTP workflow are described below.
 
@@ -18,22 +18,24 @@ Browser -> FastAPI -> SQLite job/store + private local files -> durable worker -
 | Recording intake | Stream upload, hash, probe/decode with FFmpeg/ffprobe via argument arrays, preserve original channels, create private paths and validated metadata |
 | Job/store | Python stdlib SQLite, short explicit transactions, foreign keys, schema migrations, WAL on local disk; own state transitions, leases, deduplication and immutable revisions |
 | Worker | Lifespan-managed asynchronous polling loop; claim a persisted job, checkpoint each external operation, resume from stored state. Never rely on a request-scoped background task as the queue |
-| STT adapter | Optional Gemini inline-audio adapter plus manual transcript and labelled fixture paths. Timeouts are ambiguous submissions and are not blindly retried. Model timing and speaker boundaries require review. |
-| Evaluation module | `evaluate(snapshot) -> report`; deterministic counts and WER alignment, optional narrow Gemini semantic prompts, schema/evidence validation, and no tool access. |
+| Provider adapters | Gemini inline audio plus OpenAI/Groq multipart transcription; custom is chat-only. Each adapter has bounded payloads/timeouts and secret-safe typed failures. Model timing and speaker boundaries require review. |
+| Provider session vault | Expiring process-memory credentials addressed by an opaque HttpOnly SameSite cookie and job-captured handle; no credential persistence or cross-session fallback. |
+| Evaluation module | `evaluate(snapshot) -> report`; deterministic counts and WER alignment, one shared versioned semantic prompt, schema/evidence validation, and no tool access. |
+| Regression service | Six immutable synthetic transcript/profile snapshots, per-metric expectations, persisted nonsecret metadata, and compatible baseline comparison without an aggregate. |
 | Review/export | Evidence, mapping corrections, trusted-reference attestation, findings, missing-input badges and JSON download; suggestions do not change the live agent |
 
 The FastAPI composition root in `voice_eval/app.py` only owns lifespan, middleware, exception-handler installation, static files, and router registration. `voice_eval/api/` owns thin HTTP adapters and response schemas; `voice_eval/services.py` owns use-case coordination; `voice_eval/domain.py` owns strict Pydantic contracts; provider, media, persistence, metrics, evaluation, and worker modules remain independent infrastructure/domain seams. Application filesystem and database initialization occur in lifespan rather than at import time.
 
-Use a Gemini `generateContent` request with response JSON schema, followed by independent Pydantic and source-evidence validation. The free-only configuration allowlists reviewed model IDs and requires the operator to confirm the project tier; application flags cannot override account billing. Pin resolved dependencies in `requirements.lock`. Python 3.12 is the supported baseline.
+Gemini uses `generateContent` with response JSON schema. OpenAI-compatible judging uses `/chat/completions` with strict `json_schema`. Every path then applies the same Pydantic and exact source-evidence validation. Free-tier eligibility is an explicit user attestation and cannot be inferred from key presence. Unknown-cost providers require a separate session-only opt-in. Pin resolved dependencies in `requirements.lock`. Python 3.12 is the supported baseline.
 
 The adapter seams have real variation: provider-backed and fixture-backed execution. Avoid a generic orchestration framework or a provider marketplace. FFmpeg is a process dependency because safe metadata/decode checks and channel preservation are concrete requirements. JiWER supplies audited edit alignment rather than ad hoc string scoring. Pytest and Ruff are proposed test/lint tools; choose one Python type checker in the build.
 
 ## Intake and processing
 
 1. Upload to a random private temporary filename outside static roots while enforcing the byte limit. Hash contents, check signature/MIME, ffprobe metadata and bounded decode. Reject remote URLs, playlists, archives, executable formats, corrupt data, zero duration and unsupported channel counts. Limits from NFR-01 apply before external submission. MIME checks alone do not establish safety or consent.
-2. Preserve original bytes and sample/channel metadata. If stereo channels demonstrably separate participants, retain each channel and record mapping; stereo may instead contain duplicate/mixed audio, so do not assume left=agent. Default mixed/mono path uses diarization. Produce derived PCM WAV only when required; store conversion arguments, version and hash. Never destroy source evidence by downmixing the only copy.
+2. Preserve original bytes and sample/channel metadata. If stereo channels demonstrably separate participants, retain each channel and record mapping; stereo may instead contain duplicate/mixed audio, so do not assume left=agent. The reviewed provider contracts do not invent diarization: mixed/mono transcription keeps speakers unknown until human review. Produce derived PCM WAV only when required; store conversion arguments, version and hash. Never destroy source evidence by downmixing the only copy.
 3. Atomically rename validated media into a UUID directory; commit recording and job together. If DB commit fails, delete the unreferenced file. A startup sweeper removes stale orphan temporary files after checking live job references.
-4. If Gemini is explicitly enabled, submit bounded inline audio to the allowlisted model and require schema-constrained segments. No provider call occurs from a key alone. A timeout is an ambiguous submission and is not blindly retried. Files over the inline limit require manual transcript import rather than a second provider stack. Never fetch a URL mentioned in a transcript.
+4. If an audio-capable provider is explicitly selected, use its reviewed request contract: Gemini inline JSON/base64 or OpenAI/Groq multipart transcription. No provider call occurs from saving a key alone. A timeout is an ambiguous submission and is not blindly retried. Custom endpoints require manual transcript import. Never fetch a URL mentioned in a transcript.
 5. Validate finite, nonnegative timestamps and `end >= start`; ensure spans fit decoded duration, carry explicit granularity, and do not silently clamp invalid output. Overlapping spans are valid evidence of overlap, not a sorting error. Missing or unreliable data sets quality flags. Normalize provider speaker IDs to stable local IDs, without claiming identity.
 6. Present transcript/audio and a proposed role map. Confirm/correct roles or explicitly proceed with affected checks UNKNOWN. When timing chunks do not identify turns, do not derive precise per-turn duration. Group adjacent same-speaker chunks only when no intervening speaker is known; record the grouping rule and incomplete boundaries.
 7. Snapshot all input revisions, configuration and hashes. Run deterministic metrics and the separate judge prompts. Validate schema, evidence references, quote spans and policy IDs before publishing. Persist report atomically and expose warnings distinctly from job failure.
@@ -42,10 +44,10 @@ The adapter seams have real variation: provider-backed and fixture-backed execut
 
 | State | Allowed transitions and meaning |
 |---|---|
-| NEEDS_TRANSCRIPT | Valid media is stored, but no reviewed transcript or configured Gemini path exists |
-| NEEDS_CONFIGURATION | A key exists, but the operator has not confirmed the project is free-tier eligible |
+| NEEDS_TRANSCRIPT | Valid media is stored, but no reviewed transcript or audio-capable selected provider exists |
+| NEEDS_CONFIGURATION | Environment Gemini exists, but free-tier eligibility was not confirmed |
 | QUEUED | One persisted job waits for the local worker |
-| TRANSCRIBING | Worker owns the synchronous inline Gemini request |
+| TRANSCRIBING | Worker owns one synchronous request using the job-captured provider handle |
 | REVIEW_READY | A versioned transcript exists and speaker/text review is available |
 | COMPLETED | An immutable report version exists; corrections and reruns append revisions |
 | FAILED | Provider, schema, ambiguous-submit, or internal worker failure with sanitized detail |
@@ -53,7 +55,7 @@ The adapter seams have real variation: provider-backed and fixture-backed execut
 
 Upload validation failures can return directly before a job exists. Queue/decode validation is defense in depth. COMPLETED means processing completed, never that the call passed. A valid report can contain UNKNOWN metrics. Provider outage or invalid whole response is FAILED with earlier artifacts available for review, not a report of all passes. Fixture reports have a persistent `execution_mode=fixture` banner.
 
-One in-process worker claims jobs through a short `BEGIN IMMEDIATE` transaction. Gemini `generateContent` is synchronous and returns no resumable provider handle. Therefore a process restart during TRANSCRIBING marks the job FAILED with an ambiguous-submit explanation instead of issuing a duplicate request. Late worker writes after deletion are rejected by the tombstone predicate. No distributed exactly-once guarantee is claimed.
+One in-process worker claims jobs through a short `BEGIN IMMEDIATE` transaction. Provider requests are synchronous and return no resumable submission handle. Therefore a process restart during TRANSCRIBING marks the job FAILED with an ambiguous-submit explanation instead of issuing a duplicate request. Late worker writes after deletion are rejected by the tombstone predicate. No distributed exactly-once guarantee is claimed.
 
 ## Retries and idempotency
 
@@ -67,6 +69,7 @@ Base `/api`, JSON except multipart/media; loopback only, same-origin UI, no publ
 
 | Method/path | Request | Response |
 |---|---|---|
+| GET/POST/DELETE `/provider-session` | Nonsecret metadata / provider config / none | Session metadata, opaque HttpOnly cookie, or clear confirmation |
 | POST `/jobs` | Multipart audio, profile JSON, and optional reviewed transcript/reference | 201 persisted job, 200 idempotent replay, 409 conflict, 422 invalid input, or 429 full queue |
 | GET `/jobs/{id}` | None | Persisted status, sanitized media metadata, profile, transcript, and latest report |
 | GET `/jobs/{id}/audio` | Range header allowed by the file response | Original local media; deleted jobs return 410 |
@@ -75,6 +78,7 @@ Base `/api`, JSON except multipart/media; loopback only, same-origin UI, no publ
 | GET `/jobs/{id}/export` | None | JSON attachment with job, report, history, and provider-retention note |
 | DELETE `/jobs/{id}` | None | Tombstone plus removal of local media/text/report history |
 | POST `/metrics/wer` | Trusted reference and hypothesis | WER/CER observation or explicit UNKNOWN reason |
+| GET/POST `/regression-runs` | None / optional compatible baseline ID | Recent or newly persisted fixed-suite results |
 
 Errors use FastAPI's typed HTTP status plus a safe `detail` string; credentials and raw provider responses are never returned. Pydantic rejects extra behavioral fields. An initial upload may reach REVIEW_READY when a transcript is supplied, or NEEDS_TRANSCRIPT without credentials.
 
@@ -85,6 +89,7 @@ Errors use FastAPI's typed HTTP status plus a safe `detail` string; credentials 
 | jobs | UUID, idempotency fingerprint, status/detail, private media path/metadata, profile snapshot/hash, current transcript/reference/report versions, fixture/provider metadata, timestamps, and deletion tombstone |
 | transcript_revisions | Job ID, monotonically increasing revision, validated segment JSON, creation time |
 | runs | Job ID, monotonically increasing version, validated report JSON, creation time |
+| regression_runs | Run ID, suite/provider/model/prompt/rubric/baseline metadata, immutable synthetic case results, creation time; never credentials |
 | private media | `data/media/{uuid}/original.{ext}` outside the static tree, with the client filename retained only as display metadata |
 
 Segments are objects `{id,speaker,start,end,text,precision}`. `speaker` is agent/customer/other/unknown; time fields are finite seconds and may be null only together; precision is manual/model_estimated/chunk/unknown. Source text is stored unchanged. Arbitrary framework logs must be converted explicitly rather than silently treated as a trusted transcript.
@@ -108,7 +113,7 @@ UNKNOWN and NOT_APPLICABLE require null Boolean and grade values. PASS/FAIL requ
 
 Transcripts, audio-derived text, supplied agent prompts and raw provider responses are data. Put the evaluator rubric in an immutable higher-priority instruction and serialize evaluated material as bounded structured fields. The judge has no tools, network fetches, files, secrets or arbitrary function execution. Require allowlisted metric/policy IDs; reject instruction-like additions, extra fields, unsupported quotes and nonexistent segment IDs. Escape output in HTML. Prompt instructions alone are not a security boundary, so test injection plus output validation. Redact unnecessary identifiers before judge submission where feasible; retain exact evidence offsets using an explicit redaction map rather than silently rewriting source.
 
-Store secrets only in environment configuration in a later build, never exports/logs. No remote URL ingestion, arbitrary shell, public storage path or public server bind. Limit JSON lengths, transcript size and provider-result bytes as proposed bounded settings (initially 1 MiB text and 5 MiB JSON); an exceeded budget returns an explicit error, not silent truncation. These are application safeguards, not malware-proof claims. Local storage relies on the host's access controls/disk protection; no compliance certification or secure-erasure guarantee is made.
+Browser credentials live only in an expiring process-memory vault and are never stored in SQLite, `.env`, localStorage, URLs, exports, or logs. The legacy Gemini environment fallback remains isolated from any explicitly selected session. Custom endpoints reject non-HTTPS URLs, userinfo, query/fragment data, localhost, and private/reserved DNS results, and redirects are not followed. No remote media URL ingestion, arbitrary shell, public storage path, or public server bind exists. Limit JSON lengths, transcript size and provider-result bytes; an exceeded budget returns an explicit error, not silent truncation. These are application safeguards, not malware-proof claims.
 
 Retention defaults to 24 hours. Startup cleanup removes stale upload temporaries and sweeps expired live jobs. Deletion first writes a tombstone that denies reads and late worker updates, clears transcript/reference/report fields and history, then removes local media. SQLite pages, host backups, and user-downloaded exports may retain recoverable copies, so this is local application deletion rather than a secure-erasure claim. Third-party retention cannot be controlled after a provider request and is disclosed in the UI/export.
 

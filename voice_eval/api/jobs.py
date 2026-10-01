@@ -2,11 +2,11 @@
 
 from typing import Annotated
 
-from fastapi import APIRouter, File, Form, Header, Response, UploadFile
+from fastapi import APIRouter, File, Form, Header, HTTPException, Request, Response, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import Field
 
-from voice_eval.api.dependencies import JobServiceDependency
+from voice_eval.api.dependencies import JobServiceDependency, RuntimeDependency
 from voice_eval.api.schemas import DeleteResponse, ExportResponse, PublicJob
 from voice_eval.domain import Segment
 from voice_eval.services import CreateJobCommand
@@ -17,8 +17,10 @@ TranscriptBody = Annotated[list[Segment], Field(min_length=1, max_length=1_000)]
 
 @router.post("", response_model=PublicJob, status_code=201)
 async def create_job(
+    request: Request,
     response: Response,
     jobs: JobServiceDependency,
+    runtime: RuntimeDependency,
     audio: Annotated[UploadFile, File()],
     profile_json: Annotated[str | None, Form()] = None,
     profile_id: Annotated[str | None, Form()] = None,
@@ -28,6 +30,15 @@ async def create_job(
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
 ) -> PublicJob:
     """Create a validated local job or replay an identical idempotent request."""
+    from voice_eval.provider_sessions import SESSION_COOKIE_NAME
+
+    cookie_token = request.cookies.get(SESSION_COOKIE_NAME)
+    session = runtime.sessions.session_for_cookie(cookie_token)
+    if cookie_token and session is None:
+        raise HTTPException(
+            401,
+            "Provider session expired or was cleared; reconnect or clear the stale cookie",
+        )
     result = await jobs.create_job(
         CreateJobCommand(
             audio=audio,
@@ -38,6 +49,7 @@ async def create_job(
             trusted_reference=trusted_reference,
             reference_attested=reference_attested,
             idempotency_key=idempotency_key,
+            provider_handle=session.credential_handle if session else None,
         )
     )
     response.status_code = 201 if result.created else 200

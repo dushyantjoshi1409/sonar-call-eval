@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     max_duration_seconds: float = Field(default=20 * 60, gt=0)
     max_pending_jobs: int = Field(default=20, gt=0)
     retention_hours: int = Field(default=24, gt=0)
+    provider_session_ttl_seconds: int = Field(default=60 * 60, ge=60, le=24 * 60 * 60)
     ffprobe_path: str = "ffprobe"
     ffmpeg_path: str = "ffmpeg"
     start_worker: bool = True
