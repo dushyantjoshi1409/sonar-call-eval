@@ -1,4 +1,4 @@
-# Persistence Voice Eval
+# sonar-call-eval
 
 A local FastAPI application for uploading a recorded call, reviewing its transcript and speaker roles, and producing four independent, evidence-linked findings. Scenario behavior comes from a validated profile, so the evaluator supports dental appointments, food-delivery feedback, generic calls, and custom workflows without business-specific rules in its core.
 
